@@ -24,8 +24,14 @@ Features:
 
 Limitations:
 
-- No fen parsing
-- No pondering
-- Single threaded
-- Move ordering is basic
-- Evaluation terms are hand picked
+- No fen parsing.
+- No pondering.
+- Single threaded.
+- Move ordering is basic.
+- Evaluation terms are hand picked.
+
+What made me build this engine and why in golang:
+
+- Golang because its really the only coding language i know how to write, other than python.
+- What made me write this was the fascination of original chess engines, strenght is not really that important to me, i value originality and doing something myself than copying from everyone else.
+- But i do have to say the chess programming wiki has been a great help, without them i would have never got the engine this far, so thanks to everyone over there if they are reading this.
