@@ -140,7 +140,7 @@ const DefaultMovesToGo = 30
 
 // -- Time check masks
 const (
-	NodeCheckMaskSearch = 4095
+	NodeCheckMaskSearch = 2047
 )
 
 // ============================================================================
@@ -2091,8 +2091,8 @@ func (p *Position) orderMoves(moves []Move, bestMove, killer1, killer2 Move) []M
 func (p *Position) quiesce(alpha, beta, ply int, tc *TimeControl) int {
 	p.localNodes++
 
-	if p.localNodes&NodeCheckMaskSearch == 0 {
-		if tc.shouldStop() || atomic.LoadInt32(&tc.stopped) != 0 {
+	if ply <= 1 || (p.localNodes&NodeCheckMaskSearch) == 0 {
+		if tc.shouldStop() {
 			return alpha
 		}
 	}
@@ -2228,8 +2228,7 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 	// Increment local counter to avoid atomic overhead
 	p.localNodes++
 
-	// Check time every 4096 nodes
-	if p.localNodes&NodeCheckMaskSearch == 0 {
+	if ply <= 1 || (p.localNodes&NodeCheckMaskSearch) == 0 {
 		if tc.shouldStop() {
 			return alpha
 		}
@@ -2578,6 +2577,9 @@ func (p *Position) search(tc *TimeControl) Move {
 			needFull = true
 		}
 		if needFull {
+			if tc.shouldStop() {
+				break
+			}
 			pv = pvBuf[:0] // Clear the (potentially stale) PV from the failed aspiration search
 			score = p.negamax(depth, -Infinity, Infinity, 0, &pv, tc, &ss)
 		}
@@ -2602,7 +2604,7 @@ func (p *Position) search(tc *TimeControl) Move {
 
 		// If the search was stopped during this iteration, don't print partial info.
 		// Catch both explicit Stop() and deadline-driven shouldStop()
-		if atomic.LoadInt32(&tc.stopped) != 0 || tc.shouldStop() {
+		if tc.shouldStop() {
 			break
 		}
 
