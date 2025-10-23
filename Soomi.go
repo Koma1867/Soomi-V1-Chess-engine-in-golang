@@ -90,6 +90,7 @@ const (
 
 // -- Mate guard
 const MateScoreGuard = 1000
+const MateLikeThreshold = Mate - MateScoreGuard
 
 // -- LMR
 const (
@@ -105,10 +106,10 @@ const (
 	BishopMobZeroPoint = 5
 	BishopMobCpPerMove = 3
 
-	RookMobZeroPoint = 4
+	RookMobZeroPoint = 5
 	RookMobCpPerMove = 2
 
-	QueenMobZeroPoint = 10
+	QueenMobZeroPoint = 12
 	QueenMobCpPerMove = 1
 
 	EgMobCpPerMove = 2 // endgame mobility slope for all pieces
@@ -116,13 +117,14 @@ const (
 
 // -- Passed pawns
 var (
-	PassedPawnMG = [8]int{0, 10, 25, 40, 60, 90, 130, 0}
+	PassedPawnMG = [8]int{0, 10, 25, 35, 55, 85, 130, 0}
 	PassedPawnEG = [8]int{0, 15, 30, 50, 80, 120, 170, 0}
 )
 
 // -- Aspiration window
 const AspirationBase = 20
 const AspirationStep = 3
+const AspirationStartDepth = 5
 
 // -- Phase scaling
 const PhaseScale = 256
@@ -134,12 +136,11 @@ const MVVLVAWeight = 100
 const ZobristSeed = 1070372
 
 // -- Moves to go
-const DefaultMovesToGo = 20
+const DefaultMovesToGo = 30
 
 // -- Time check masks
 const (
-	NodeCheckMaskSearch  = 4095
-	NodeCheckMaskQuiesce = 2047
+	NodeCheckMaskSearch = 4095
 )
 
 // ============================================================================
@@ -205,7 +206,7 @@ type SearchStack struct {
 // ============================================================================
 // piece values and piece-square tables
 var (
-	pieceValues = [6]int{100, 320, 340, 525, 1000, 20000}
+	pieceValues = [6]int{100, 320, 340, 500, 960, 20000}
 	pst         [2][6][64]int
 	pstEnd      [2][6][64]int
 )
@@ -264,7 +265,7 @@ func initLMR() {
 		if d >= LMRMinChildDepth {
 			depthBonus := 0
 			if d > LMRMinChildDepth {
-				depthBonus = (d - 3) / 10
+				depthBonus = (d - LMRMinChildDepth) / 10
 			}
 			for m := 3; m <= maxLMRMoves; m++ {
 				moveBonus := (m - 3) / 6
@@ -437,23 +438,23 @@ func (t *TranspositionTable) Probe(key uint64, minDepth int) (ttEntry, bool, boo
 }
 
 func (t *TranspositionTable) Save(key uint64, mv Move, score int, depth int, flag uint8) {
-	idx := int(key & t.mask)
-	old := t.entries[idx]
-
-	// If the old entry is stale (from a previous search) we always replace to avoid unwanted behavior
-	oldGen := uint8(old.packed >> 8)
-	if oldGen != uint8(t.gen) {
-		t.entries[idx] = ttEntry{key: key, packed: packEntry(uint32(mv), int16(score), uint8(t.gen), uint8(depth), flag)}
-		return
+	if depth < 0 {
+		depth = 0
+	} else if depth > 63 {
+		depth = 63
 	}
-
-	// Clamp score to int16 range
 	if score > 32767 {
 		score = 32767
 	} else if score < -32768 {
 		score = -32768
 	}
 	newPacked := packEntry(uint32(mv), int16(score), uint8(t.gen), uint8(depth), flag)
+	idx := int(key & t.mask)
+	old := t.entries[idx]
+	if uint8(old.packed>>8) != uint8(t.gen) {
+		t.entries[idx] = ttEntry{key: key, packed: newPacked}
+		return
+	}
 
 	if old.key == key {
 		// Same position: overwrite if new entry is better
@@ -504,7 +505,7 @@ func initPST() {
 		-40, -20, 0, 5, 5, 0, -20, -40,
 		-30, 5, 10, 15, 15, 10, 5, -30,
 		-30, 0, 15, 20, 20, 15, 0, -30,
-		-30, 5, 15, 25, 25, 15, 5, -30,
+		-30, 5, 15, 22, 22, 15, 5, -30,
 		-30, 0, 10, 15, 15, 10, 0, -30,
 		-40, -20, 0, 0, 0, 0, -20, -40,
 		-50, -40, -30, -30, -30, -30, -40, -50,
@@ -528,7 +529,7 @@ func initPST() {
 		-5, 0, 0, 0, 0, 0, 0, -5,
 		-5, 0, 0, 0, 0, 0, 0, -5,
 		-5, 0, 0, 0, 0, 0, 0, -5,
-		10, 15, 15, 20, 20, 15, 15, 10,
+		10, 12, 12, 15, 15, 12, 12, 10,
 		0, 0, 0, 5, 5, 0, 0, 0,
 	}
 
@@ -1186,45 +1187,225 @@ func (p *Position) generateMovesTo(buf []Move, capturesOnly bool) int {
 // ============================================================================
 // ISLEGAL
 // ============================================================================
-// Used for fast legality checking instead of make move and unmake move,
-// which would have to update stuff that is not necessary for legality,
-// for example interpolation of middlegame and endgame
 func (p *Position) isLegal(m Move) bool {
 	if m == 0 {
 		return false
 	}
-
-	from := m.from()
-	to := m.to()
-	mover := p.side
-	opp := mover ^ 1
-
-	fromBB := sqBB[from]
-	toBB := sqBB[to]
-
-	ourP := p.pieces[mover][Pawn]
-	ourN := p.pieces[mover][Knight]
-	ourB := p.pieces[mover][Bishop]
-	ourR := p.pieces[mover][Rook]
-	ourQ := p.pieces[mover][Queen]
-	ourK := p.pieces[mover][King]
-
-	theirP := p.pieces[opp][Pawn]
-	theirN := p.pieces[opp][Knight]
-	theirB := p.pieces[opp][Bishop]
-	theirR := p.pieces[opp][Rook]
-	theirQ := p.pieces[opp][Queen]
-	theirK := p.pieces[opp][King]
-
-	// Get moving piece type
-	val := p.square[from]
-	if val < 0 {
+	from, to := m.from(), m.to()
+	if from == to {
 		return false
 	}
-	movingPt := val & 7
 
-	// Remove from the specific piece bitboard
-	switch movingPt {
+	us, them := p.side, p.side^1
+	val := p.square[from]
+	if val < 0 || (val>>3) != us {
+		return false
+	}
+	pt := val & 7
+	flags := m.flags()
+
+	fromBB, toBB := sqBB[from], sqBB[to]
+	occAll := p.all
+	ourOcc := p.occupied[us]
+	theirOcc := p.occupied[them]
+
+	// cannot move onto own piece or "capture" a king
+	if ourOcc&toBB != 0 || (p.pieces[them][King]&toBB) != 0 {
+		return false
+	}
+
+	// semantics
+	if flags == FlagCastle {
+		if pt != King {
+			return false
+		}
+		d := to - from
+		if d != 2 && d != -2 {
+			return false
+		}
+		// king must castle from start square
+		if (us == White && from != 4) || (us == Black && from != 60) {
+			return false
+		}
+		if d > 0 { // O-O
+			if us == White {
+				if p.castle&1 == 0 || (occAll&(sqBB[from+1]|sqBB[from+2])) != 0 {
+					return false
+				}
+			} else {
+				if p.castle&4 == 0 || (occAll&(sqBB[from+1]|sqBB[from+2])) != 0 {
+					return false
+				}
+			}
+			if (p.pieces[us][Rook] & sqBB[from+3]) == 0 {
+				return false
+			}
+			if p.isAttacked(from, them) || p.isAttacked(from+1, them) || p.isAttacked(to, them) {
+				return false
+			}
+		} else { // O-O-O
+			if us == White {
+				if p.castle&2 == 0 || (occAll&(sqBB[from-1]|sqBB[from-2]|sqBB[from-3])) != 0 {
+					return false
+				}
+			} else {
+				if p.castle&8 == 0 || (occAll&(sqBB[from-1]|sqBB[from-2]|sqBB[from-3])) != 0 {
+					return false
+				}
+			}
+			if (p.pieces[us][Rook] & sqBB[from-4]) == 0 {
+				return false
+			}
+			if p.isAttacked(from, them) || p.isAttacked(from-1, them) || p.isAttacked(to, them) {
+				return false
+			}
+		}
+	} else if flags == FlagEP {
+		if pt != Pawn || p.epSquare != to {
+			return false
+		}
+		if occAll&toBB != 0 {
+			return false
+		}
+		capSq := to - 8
+		if us == Black {
+			capSq = to + 8
+		}
+		if (p.pieces[them][Pawn] & sqBB[capSq]) == 0 {
+			return false
+		}
+		d := to - from
+		if us == White {
+			if d != 7 && d != 9 {
+				return false
+			}
+		} else {
+			if d != -7 && d != -9 {
+				return false
+			}
+		}
+	} else {
+		switch pt {
+		case Pawn:
+			step, startRank := 8, 1
+			if us == Black {
+				step, startRank = -8, 6
+			}
+			d := to - from
+			if m.isCapture() {
+				if (theirOcc & toBB) == 0 {
+					return false
+				}
+				if us == White {
+					if d != 7 && d != 9 {
+						return false
+					}
+				} else {
+					if d != -7 && d != -9 {
+						return false
+					}
+				}
+			} else {
+				if occAll&toBB != 0 {
+					return false
+				}
+				if d == step {
+					// ok
+				} else if d == 2*step {
+					if from/8 != startRank || (occAll&sqBB[from+step]) != 0 {
+						return false
+					}
+				} else {
+					return false
+				}
+			}
+			tr := to / 8
+			if us == White {
+				if tr == 7 && !m.isPromo() {
+					return false
+				}
+				if tr != 7 && m.isPromo() {
+					return false
+				}
+			} else {
+				if tr == 0 && !m.isPromo() {
+					return false
+				}
+				if tr != 0 && m.isPromo() {
+					return false
+				}
+			}
+			if m.isPromo() {
+				t := m.promoType()
+				if t < Knight || t > Queen {
+					return false
+				}
+			}
+		case Knight:
+			if (knightAttacks[from] & toBB) == 0 {
+				return false
+			}
+			if m.isCapture() {
+				if (theirOcc & toBB) == 0 {
+					return false
+				}
+			} else if (occAll & toBB) != 0 {
+				return false
+			}
+		case Bishop:
+			if (bishopAttacks(from, occAll^fromBB) & toBB) == 0 {
+				return false
+			}
+			if m.isCapture() {
+				if (theirOcc & toBB) == 0 {
+					return false
+				}
+			} else if (occAll & toBB) != 0 {
+				return false
+			}
+		case Rook:
+			if (rookAttacks(from, occAll^fromBB) & toBB) == 0 {
+				return false
+			}
+			if m.isCapture() {
+				if (theirOcc & toBB) == 0 {
+					return false
+				}
+			} else if (occAll & toBB) != 0 {
+				return false
+			}
+		case Queen:
+			if ((rookAttacks(from, occAll^fromBB) | bishopAttacks(from, occAll^fromBB)) & toBB) == 0 {
+				return false
+			}
+			if m.isCapture() {
+				if (theirOcc & toBB) == 0 {
+					return false
+				}
+			} else if (occAll & toBB) != 0 {
+				return false
+			}
+		case King:
+			if (kingAttacks[from] & toBB) == 0 {
+				return false
+			}
+			if m.isCapture() {
+				if (theirOcc & toBB) == 0 {
+					return false
+				}
+			} else if (occAll & toBB) != 0 {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+
+	// simulate for king safety
+	ourP, ourN, ourB, ourR, ourQ, ourK := p.pieces[us][Pawn], p.pieces[us][Knight], p.pieces[us][Bishop], p.pieces[us][Rook], p.pieces[us][Queen], p.pieces[us][King]
+	theirP, theirN, theirB, theirR, theirQ, theirK := p.pieces[them][Pawn], p.pieces[them][Knight], p.pieces[them][Bishop], p.pieces[them][Rook], p.pieces[them][Queen], p.pieces[them][King]
+
+	switch pt {
 	case Pawn:
 		ourP &^= fromBB
 	case Knight:
@@ -1239,19 +1420,16 @@ func (p *Position) isLegal(m Move) bool {
 		ourK &^= fromBB
 	}
 
-	// Handle captures (normal or en-passant)
 	if m.isCapture() {
 		capSq := to
-		if m.flags() == FlagEP {
-			if mover == White {
+		if flags == FlagEP {
+			if us == White {
 				capSq = to - 8
 			} else {
 				capSq = to + 8
 			}
 		}
 		capBB := sqBB[capSq]
-
-		// Remove victim from their locals
 		if theirP&capBB != 0 {
 			theirP &^= capBB
 		} else if theirN&capBB != 0 {
@@ -1263,11 +1441,10 @@ func (p *Position) isLegal(m Move) bool {
 		} else if theirQ&capBB != 0 {
 			theirQ &^= capBB
 		} else if theirK&capBB != 0 {
-			theirK &^= capBB
+			return false
 		}
 	}
 
-	// Place moving piece at 'to' (handle promotions)
 	if m.isPromo() {
 		switch m.promoType() {
 		case Queen:
@@ -1279,11 +1456,10 @@ func (p *Position) isLegal(m Move) bool {
 		case Knight:
 			ourN |= toBB
 		default:
-			// fallback: queen
-			ourQ |= toBB
+			return false
 		}
 	} else {
-		switch movingPt {
+		switch pt {
 		case Pawn:
 			ourP |= toBB
 		case Knight:
@@ -1299,34 +1475,19 @@ func (p *Position) isLegal(m Move) bool {
 		}
 	}
 
-	// Handle castling: rook move
-	if movingPt == King {
-		diff := to - from
-		if diff == 2 || diff == -2 {
-			// Rook move in hypothetical position
-			var rf, rt int
-			if diff > 0 { // Kingside
-				rf = to + 1
-				rt = to - 1
-			} else { // Queenside
-				rf = to - 2
-				rt = to + 1
-			}
-			rfBB := sqBB[rf]
-			rtBB := sqBB[rt]
-			ourR &^= rfBB
-			ourR |= rtBB
+	if flags == FlagCastle {
+		if to > from {
+			ourR &^= sqBB[from+3]
+			ourR |= sqBB[from+1]
+		} else {
+			ourR &^= sqBB[from-4]
+			ourR |= sqBB[from-1]
 		}
 	}
 
-	// Build occupancies
-	ourOcc := ourP | ourN | ourB | ourR | ourQ | ourK
-	theirOcc := theirP | theirN | theirB | theirR | theirQ | theirK
-	occ := ourOcc | theirOcc
-
-	// King square after the move
+	occ2 := (ourP | ourN | ourB | ourR | ourQ | ourK) | (theirP | theirN | theirB | theirR | theirQ | theirK)
 	var kingSq int
-	if movingPt == King {
+	if pt == King {
 		kingSq = to
 	} else {
 		if ourK == 0 {
@@ -1335,9 +1496,7 @@ func (p *Position) isLegal(m Move) bool {
 		kingSq = bits.TrailingZeros64(uint64(ourK))
 	}
 
-	// Now test attacks on kingSq by opponent pieces in the resulting position.
-	// Use the same pawn-indexing that isAttacked uses: pawnAttacks[bySide^1][sq]
-	if pawnAttacks[opp^1][kingSq]&theirP != 0 {
+	if pawnAttacks[them^1][kingSq]&theirP != 0 {
 		return false
 	}
 	if knightAttacks[kingSq]&theirN != 0 {
@@ -1346,14 +1505,13 @@ func (p *Position) isLegal(m Move) bool {
 	if kingAttacks[kingSq]&theirK != 0 {
 		return false
 	}
-	if bishopAttacks(kingSq, occ)&(theirB|theirQ) != 0 {
+	if bishopAttacks(kingSq, occ2)&(theirB|theirQ) != 0 {
 		return false
 	}
-	if rookAttacks(kingSq, occ)&(theirR|theirQ) != 0 {
+	if rookAttacks(kingSq, occ2)&(theirR|theirQ) != 0 {
 		return false
 	}
-
-	// All good, move is legal
+	// Move is legal, return true
 	return true
 }
 
@@ -1934,8 +2092,8 @@ func (p *Position) orderMoves(moves []Move, bestMove, killer1, killer2 Move) []M
 func (p *Position) quiesce(alpha, beta, ply int, tc *TimeControl) int {
 	p.localNodes++
 
-	if p.localNodes&NodeCheckMaskQuiesce == 0 {
-		if atomic.LoadInt32(&tc.stopped) != 0 {
+	if p.localNodes&NodeCheckMaskSearch == 0 {
+		if tc.shouldStop() || atomic.LoadInt32(&tc.stopped) != 0 {
 			return alpha
 		}
 	}
@@ -1950,21 +2108,28 @@ func (p *Position) quiesce(alpha, beta, ply int, tc *TimeControl) int {
 	if e, found, usable := tt.Probe(p.hash, 0); found && usable {
 		_, score, _, _, flag := e.unpack()
 		scoreFromTT := int(score)
-		// Adjust mate scores from TT (position-relative to root-relative)
-		if scoreFromTT > Mate-MateScoreGuard {
-			scoreFromTT -= ply
-		} else if scoreFromTT < -Mate+MateScoreGuard {
-			scoreFromTT += ply
+		isMate := scoreFromTT > Mate-MateScoreGuard || scoreFromTT < -Mate+MateScoreGuard
+		if isMate {
+			if scoreFromTT > 0 {
+				scoreFromTT -= ply
+			} else {
+				scoreFromTT += ply
+			}
+			if flag != ttFlagExact {
+				usable = false
+			}
 		}
-		// Use score only if exact or within bounds
-		if flag == ttFlagExact {
-			return scoreFromTT
-		}
-		if flag == ttFlagLower && scoreFromTT >= beta {
-			return scoreFromTT
-		}
-		if flag == ttFlagUpper && scoreFromTT <= alpha {
-			return scoreFromTT
+		// Use score only if exact or within bounds; ignore non-exact mate-like bounds
+		if !(isMate && flag != ttFlagExact) {
+			if flag == ttFlagExact {
+				return scoreFromTT
+			}
+			if flag == ttFlagLower && scoreFromTT >= beta {
+				return scoreFromTT
+			}
+			if flag == ttFlagUpper && scoreFromTT <= alpha {
+				return scoreFromTT
+			}
 		}
 	}
 
@@ -2300,9 +2465,9 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 			// Adjust mate scores before storing (root-relative to position-relative)
 			storeScore := score
 			if storeScore > Mate-MateScoreGuard {
-				storeScore -= ply
-			} else if storeScore < -Mate+MateScoreGuard {
 				storeScore += ply
+			} else if storeScore < -Mate+MateScoreGuard {
+				storeScore -= ply
 			}
 			tt.Save(p.hash, m, storeScore, depth, ttFlagLower)
 			return beta
@@ -2348,9 +2513,9 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 	// Adjust mate scores before storing (root-relative to position-relative)
 	storeScore := bestScore
 	if storeScore > Mate-MateScoreGuard {
-		storeScore -= ply
-	} else if storeScore < -Mate+MateScoreGuard {
 		storeScore += ply
+	} else if storeScore < -Mate+MateScoreGuard {
+		storeScore -= ply
 	}
 	tt.Save(p.hash, bestMove, storeScore, depth, storeFlag)
 	return bestScore
@@ -2393,17 +2558,23 @@ func (p *Position) search(tc *TimeControl) Move {
 		var score int
 
 		needFull := false
-		if depth > 4 && havePrev {
+		if depth >= AspirationStartDepth && havePrev {
 			// aspiration with depth based widening
 			base := prevScore
 
-			window := AspirationBase + depth*AspirationStep
-			low := base - window
-			high := base + window
+			// Mate-guard: skip aspiration if last root score is mate-like
+			if abs(base) >= MateLikeThreshold {
+				needFull = true // mate-like: skip aspiration
+			} else {
 
-			score = p.negamax(depth, low, high, 0, &pv, tc, &ss)
-			if score <= low || score >= high {
-				needFull = true
+				window := AspirationBase + depth*AspirationStep
+				low := base - window
+				high := base + window
+
+				score = p.negamax(depth, low, high, 0, &pv, tc, &ss)
+				if score <= low || score >= high {
+					needFull = true
+				}
 			}
 		} else {
 			needFull = true
