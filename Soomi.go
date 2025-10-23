@@ -344,7 +344,6 @@ func (p *Position) isRepetition() bool {
 // RUNTIME GLOBALS
 // ============================================================================
 var (
-	nodes     int64
 	currentTC atomic.Pointer[TimeControl]
 	tt        *TranspositionTable
 )
@@ -2546,8 +2545,7 @@ func (p *Position) search(tc *TimeControl) Move {
 	var pvBuf [MaxDepth]Move
 	for depth := 1; depth <= maxDepth; depth++ {
 
-		// Reset node counters for this iteration
-		atomic.StoreInt64(&nodes, 0)
+		// Reset node counter for this iteration
 		p.localNodes = 0
 
 		// Start timer for this iteration.
@@ -2591,8 +2589,7 @@ func (p *Position) search(tc *TimeControl) Move {
 			havePrev = true
 		}
 
-		// Flush local nodes to global counter
-		atomic.AddInt64(&nodes, p.localNodes)
+		// Snapshot local nodes for reporting
 		iterNodes := p.localNodes
 
 		// Compute elapsed time for reporting and nps
@@ -2685,12 +2682,10 @@ func (tc *TimeControl) Stop() {
 
 func (tc *TimeControl) allocateTime(side int) {
 	now := time.Now()
-	var dead int64 = 0
 
 	// fixed movetime wins
 	if tc.movetime > 0 {
-		dead = now.UnixNano() + tc.movetime*int64(time.Millisecond)
-		atomic.StoreInt64(&tc.stopDeadline, dead)
+		atomic.StoreInt64(&tc.stopDeadline, now.UnixNano()+tc.movetime*int64(time.Millisecond))
 		return
 	}
 	// depth/infinite = no deadline
@@ -2736,9 +2731,8 @@ func (tc *TimeControl) allocateTime(side int) {
 		baseMs = minThinkMs
 	}
 
-	// compute deadline using integer arithmetic
-	dead = now.UnixNano() + baseMs*int64(time.Millisecond)
-	atomic.StoreInt64(&tc.stopDeadline, dead)
+	// compute deadline
+	atomic.StoreInt64(&tc.stopDeadline, now.UnixNano()+baseMs*int64(time.Millisecond))
 }
 
 func (tc *TimeControl) shouldStop() bool {
