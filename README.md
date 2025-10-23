@@ -35,3 +35,6 @@ What made me build this engine and why in golang:
 - Golang because its really the only coding language i know how to write, other than python.
 - What made me write this was the fascination of original chess engines, strenght is not really that important to me, i value originality and doing something myself than copying from everyone else.
 - But i do have to say the chess programming wiki has been a great help, without them i would have never got the engine this far, so thanks to everyone over there if they are reading this.
+
+  To Note: Sometimes antivirus says the executable is a virus, if you want to use the file antivirus has to be switched off or you have to build the file yourself inside terminal.
+  You have to first download golang from https://go.dev/doc/install and then in terminal navigate to where Soomi.go file is and type "go build -o Soomi.exe soomi.go" 
