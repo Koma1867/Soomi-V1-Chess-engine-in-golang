@@ -62,7 +62,9 @@ const (
 )
 
 // -- TT size
-const defaultTTSizeMB = 256 // Tune for your own system ;)
+// Default transposition table size in megabytes. This is a reasonable default for
+// modern systems with several GB of RAM. Can be overridden via UCI "Hash" option.
+const defaultTTSizeMB = 256
 
 // -- Cap for LMR
 const maxLMRMoves = 64
@@ -94,8 +96,12 @@ const MateLikeThreshold = Mate - MateScoreGuard
 
 // -- LMR
 const (
-	LMRMinChildDepth = 3 // was: childDepth >= 3
-	LMRLateMoveAfter = 2 // was: moveNum > 2
+	// LMRMinChildDepth is the minimum remaining depth required to apply Late Move Reductions.
+	// Moves are only reduced when the child node will be searched to at least this depth.
+	LMRMinChildDepth = 3
+	// LMRLateMoveAfter defines which moves are "late" for LMR purposes.
+	// Moves after this index (3rd move onward) are candidates for reduction.
+	LMRLateMoveAfter = 2
 )
 
 // -- Mobility
@@ -413,7 +419,8 @@ func InitTT(sizeMB int) {
 }
 
 func (t *TranspositionTable) Clear() {
-	// cheap invalidate
+	// Increment generation counter to invalidate all entries without clearing memory.
+	// Only performs a full memory clear when generation counter wraps around (every 255 clears).
 	t.gen++
 	if t.gen > 255 {
 		t.gen = 1
@@ -661,7 +668,9 @@ func initZobrist() {
 	}
 }
 
-// Here i have to warn pawn attacks use a brittle formula, its stupid but works
+// initAttacks precomputes attack bitboards for knights, kings, and pawns.
+// Pawn attacks are computed using rank/file arithmetic rather than direction offsets
+// to handle board edge cases implicitly.
 func initAttacks() {
 	knightDirs := []int{-17, -15, -10, -6, 6, 10, 15, 17}
 	kingDirs := []int{-9, -8, -7, -1, 1, 7, 8, 9}
@@ -1698,7 +1707,8 @@ func (p *Position) makeMove(m Move) Undo {
 		}
 	}
 
-	// XOR only changed castle bits (XOR is self-inverse (h^x^x=h) so unchanged bits cancel)
+	// Update hash for only the castling rights that changed between the old and new positions.
+	// XOR the bits that differ to maintain incremental hash correctness.
 	changedCastle := undo.castle ^ p.castle
 	if changedCastle&1 != 0 {
 		h ^= zobristCastleWK
@@ -2133,10 +2143,10 @@ func (p *Position) quiesce(alpha, beta, ply int, tc *TimeControl) int {
 	}
 
 	inCheck := p.inCheck()
-	stand := p.evaluate()
 	best := alpha
 	if !inCheck {
 		// stand-pat
+		stand := p.evaluate()
 		if stand >= beta {
 			return stand
 		}
@@ -2437,13 +2447,6 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 		// unmake after both reduced and possible re-search
 		p.unmakeMove(m, undo)
 
-		// update best found
-		if score > bestScore {
-			bestScore = score
-			bestMove = m
-			bestChildPV = append(([]Move)(nil), childPV...)
-		}
-
 		// beta cutoff
 		if score >= beta {
 			// record killer at this ply
@@ -2456,9 +2459,7 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 
 			// fill PV for cutoff so callers see a meaningful PV
 			if pvNode {
-				*pv = (*pv)[:0]
-				*pv = append(*pv, m)
-				*pv = append(*pv, childPV...)
+				*pv = append(append((*pv)[:0], m), childPV...)
 			}
 			// Adjust mate scores before storing (root-relative to position-relative)
 			storeScore := score
@@ -2471,13 +2472,20 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 			return beta
 		}
 
+		// update best found
+		if score > bestScore {
+			bestScore = score
+			bestMove = m
+			if pvNode {
+				bestChildPV = append(bestChildPV[:0], childPV...)
+			}
+		}
+
 		// alpha improvement
 		if score > alpha {
 			alpha = score
 			if pv != nil {
-				*pv = (*pv)[:0]
-				*pv = append(*pv, m)
-				*pv = append(*pv, childPV...)
+				*pv = append(append((*pv)[:0], m), childPV...)
 			}
 		}
 	}
@@ -2577,16 +2585,13 @@ func (p *Position) search(tc *TimeControl) Move {
 			needFull = true
 		}
 		if needFull {
-			if tc.shouldStop() {
-				break
-			}
 			pv = pvBuf[:0] // Clear the (potentially stale) PV from the failed aspiration search
 			score = p.negamax(depth, -Infinity, Infinity, 0, &pv, tc, &ss)
 		}
 
 		// If the search was not stopped, store the score for the next aspiration search
 		// This prevents a score from a partial search from corrupting the next iteration's window
-		if atomic.LoadInt32(&tc.stopped) == 0 && !tc.shouldStop() {
+		if !tc.shouldStop() {
 			prevScore = score
 			havePrev = true
 		}
@@ -2647,12 +2652,6 @@ func (p *Position) search(tc *TimeControl) Move {
 			fmt.Printf(" %v", m)
 		}
 		fmt.Println()
-
-		// If the time control was triggered during the iteration, stop iterating
-		// after adopting (or not) the PV and printing the info for this iteration
-		if atomic.LoadInt32(&tc.stopped) != 0 {
-			break
-		}
 
 		// Decide whether to stop before the next iteration. Call shouldStop() once
 		if tc.shouldStop() || !tc.shouldContinue(elapsed) {
@@ -2757,9 +2756,6 @@ func (tc *TimeControl) shouldContinue(lastIter time.Duration) bool {
 		return true
 	}
 	left := time.Duration(d - time.Now().UnixNano())
-	if left <= 0 {
-		return false
-	}
 	return left > lastIter*nextIterMult+continueMargin
 }
 
