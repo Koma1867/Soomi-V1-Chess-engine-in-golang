@@ -80,7 +80,7 @@ const (
 	reserveMs      int64         = 100
 	minThinkMs     int64         = 100
 	perMoveCapDiv  int64         = 2
-	nextIterMult   time.Duration = 2
+	nextIterMult                 = 2
 	continueMargin time.Duration = 10 * time.Millisecond
 )
 
@@ -106,29 +106,29 @@ const (
 
 // -- Mobility
 const (
-	KnightMobZeroPoint = 3
-	KnightMobCpPerMove = 4
+	KnightMobZeroPoint = 4
+	KnightMobCpPerMove = 3
 
-	BishopMobZeroPoint = 5
+	BishopMobZeroPoint = 7
 	BishopMobCpPerMove = 3
 
-	RookMobZeroPoint = 5
+	RookMobZeroPoint = 7
 	RookMobCpPerMove = 2
 
-	QueenMobZeroPoint = 12
+	QueenMobZeroPoint = 14
 	QueenMobCpPerMove = 1
 
-	EgMobCpPerMove = 2 // endgame mobility slope for all pieces
+	EgMobCpPerMove = 3 // endgame mobility slope for all pieces
 )
 
 // -- Passed pawns
 var (
-	PassedPawnMG = [8]int{0, 10, 25, 35, 55, 85, 130, 0}
-	PassedPawnEG = [8]int{0, 15, 30, 50, 80, 120, 170, 0}
+	PassedPawnMG = [8]int{0, 8, 18, 32, 52, 80, 120, 0}
+	PassedPawnEG = [8]int{0, 12, 28, 52, 88, 140, 220, 0}
 )
 
 // -- Aspiration window
-const AspirationBase = 20
+const AspirationBase = 30
 const AspirationStep = 3
 const AspirationStartDepth = 5
 
@@ -188,16 +188,16 @@ type Undo struct {
 
 // -- Time management structure
 type TimeControl struct {
-	wtime        int64
-	btime        int64
-	winc         int64
-	binc         int64
-	movestogo    int
-	movetime     int64
-	infinite     bool
-	depth        int
-	stopDeadline int64
-	stopped      int32
+	wtime     int64
+	btime     int64
+	winc      int64
+	binc      int64
+	movestogo int
+	movetime  int64
+	infinite  bool
+	depth     int
+	deadline  time.Time
+	stopped   int32
 }
 
 // -- Killer moves for move-ordering and Improving for LMR
@@ -212,7 +212,7 @@ type SearchStack struct {
 // ============================================================================
 // piece values and piece-square tables
 var (
-	pieceValues = [6]int{100, 320, 340, 500, 960, 20000}
+	pieceValues = [6]int{100, 320, 330, 500, 950, 20000}
 	pst         [2][6][64]int
 	pstEnd      [2][6][64]int
 )
@@ -497,34 +497,34 @@ func init() {
 func initPST() {
 	pst[White][Pawn] = [64]int{
 		0, 0, 0, 0, 0, 0, 0, 0,
-		-5, 0, 0, -20, -20, 0, 0, -5,
-		-5, 0, 0, 5, 5, 0, 0, -5,
-		0, 0, 0, 25, 25, 0, 0, 0,
-		5, 5, 10, 30, 30, 10, 5, 5,
-		10, 10, 20, 35, 35, 20, 10, 10,
-		40, 40, 40, 40, 40, 40, 40, 40,
+		-6, 6, 6, -14, -14, 6, 6, -6,
+		-6, 0, -8, 6, 6, -8, 0, -6,
+		0, 2, 10, 22, 22, 10, 2, 0,
+		6, 6, 16, 26, 26, 16, 6, 6,
+		10, 12, 20, 30, 30, 20, 12, 10,
+		20, 20, 20, 20, 20, 20, 20, 20,
 		0, 0, 0, 0, 0, 0, 0, 0,
 	}
 
 	pst[White][Knight] = [64]int{
 		-50, -40, -30, -30, -30, -30, -40, -50,
-		-40, -20, 0, 5, 5, 0, -20, -40,
-		-30, 5, 10, 15, 15, 10, 5, -30,
-		-30, 0, 15, 20, 20, 15, 0, -30,
-		-30, 5, 15, 22, 22, 15, 5, -30,
-		-30, 0, 10, 15, 15, 10, 0, -30,
+		-40, -20, 0, 6, 6, 0, -20, -40,
+		-30, 6, 12, 16, 16, 12, 6, -30,
+		-30, 0, 16, 22, 22, 16, 0, -30,
+		-30, 6, 16, 24, 24, 16, 6, -30,
+		-30, 0, 12, 16, 16, 12, 0, -30,
 		-40, -20, 0, 0, 0, 0, -20, -40,
 		-50, -40, -30, -30, -30, -30, -40, -50,
 	}
 
 	pst[White][Bishop] = [64]int{
 		-20, -10, -10, -10, -10, -10, -10, -20,
-		-10, 20, 0, 0, 0, 0, 20, -10,
-		-10, 0, 5, 10, 10, 5, 0, -10,
-		-10, 5, 5, 10, 10, 5, 5, -10,
-		-10, 0, 10, 15, 15, 10, 0, -10,
-		-10, 10, 10, 15, 15, 10, 10, -10,
-		-10, 5, 0, 0, 0, 0, 5, -10,
+		-10, 18, 0, 0, 0, 0, 18, -10,
+		-10, 0, 6, 12, 12, 6, 0, -10,
+		-10, 6, 6, 12, 12, 6, 6, -10,
+		-10, 0, 12, 16, 16, 12, 0, -10,
+		-10, 10, 10, 16, 16, 10, 10, -10,
+		-10, 6, 0, 0, 0, 0, 6, -10,
 		-20, -10, -10, -10, -10, -10, -10, -20,
 	}
 
@@ -542,17 +542,17 @@ func initPST() {
 	pst[White][Queen] = [64]int{
 		-20, -10, -10, -5, -5, -10, -10, -20,
 		-10, 0, 0, 0, 0, 0, 0, -10,
-		-10, 0, 5, 5, 5, 5, 0, -10,
-		-5, 0, 5, 5, 5, 5, 0, -5,
-		0, 0, 5, 5, 5, 5, 0, -5,
-		-10, 5, 5, 5, 5, 5, 0, -10,
-		-10, 0, 5, 0, 0, 0, 0, -10,
+		-10, 0, 4, 4, 4, 4, 0, -10,
+		-5, 0, 4, 4, 4, 4, 0, -5,
+		0, 0, 4, 4, 4, 4, 0, -5,
+		-10, 4, 4, 4, 4, 4, 0, -10,
+		-10, 0, 4, 0, 0, 0, 0, -10,
 		-20, -10, -10, -5, -5, -10, -10, -20,
 	}
 
 	pst[White][King] = [64]int{
-		20, 30, 10, 0, 0, 10, 30, 20,
-		20, 20, -5, -10, -10, -5, 20, 20,
+		50, 40, 5, -20, -20, 5, 40, 50,
+		10, 10, -15, -30, -30, -15, 10, 10,
 		-10, -20, -20, -20, -20, -20, -20, -10,
 		-20, -30, -30, -40, -40, -30, -30, -20,
 		-30, -40, -40, -50, -50, -40, -40, -30,
@@ -568,40 +568,40 @@ func initPST() {
 	copy(pstEnd[:], pst[:])
 	pstEnd[White][Pawn] = [64]int{
 		0, 0, 0, 0, 0, 0, 0, 0,
-		5, 5, 5, 5, 5, 5, 5, 5,
+		4, 4, 4, 4, 4, 4, 4, 4,
 		10, 10, 10, 10, 10, 10, 10, 10,
 		20, 20, 20, 20, 20, 20, 20, 20,
-		35, 35, 35, 35, 35, 35, 35, 35,
-		50, 50, 50, 50, 50, 50, 50, 50,
+		34, 34, 34, 34, 34, 34, 34, 34,
+		48, 48, 48, 48, 48, 48, 48, 48,
 		60, 60, 60, 60, 60, 60, 60, 60,
 		0, 0, 0, 0, 0, 0, 0, 0,
 	}
 
 	pstEnd[White][Knight] = [64]int{
-		-50, -40, -30, -30, -30, -30, -40, -50,
-		-40, -20, 0, 0, 0, 0, -20, -40,
-		-30, 0, 10, 15, 15, 10, 0, -30,
-		-30, 5, 15, 20, 20, 15, 5, -30,
-		-30, 0, 15, 20, 20, 15, 0, -30,
-		-30, 5, 10, 15, 15, 10, 5, -30,
-		-40, -20, 0, 5, 5, 0, -20, -40,
-		-50, -40, -30, -30, -30, -30, -40, -50,
+		-48, -38, -28, -28, -28, -28, -38, -48,
+		-38, -18, 0, 2, 2, 0, -18, -38,
+		-28, 2, 10, 14, 14, 10, 2, -28,
+		-28, 6, 14, 20, 20, 14, 6, -28,
+		-28, 2, 14, 20, 20, 14, 2, -28,
+		-28, 6, 10, 14, 14, 10, 6, -28,
+		-38, -18, 0, 4, 4, 0, -18, -38,
+		-48, -38, -28, -28, -28, -28, -38, -48,
 	}
 
 	pstEnd[White][Bishop] = [64]int{
 		-20, -10, -10, -10, -10, -10, -10, -20,
 		-10, 0, 0, 0, 0, 0, 0, -10,
-		-10, 0, 5, 10, 10, 5, 0, -10,
-		-10, 5, 10, 15, 15, 10, 5, -10,
-		-10, 0, 10, 15, 15, 10, 0, -10,
-		-10, 5, 10, 15, 15, 10, 5, -10,
-		-10, 10, 5, 5, 5, 5, 10, -10,
+		-10, 0, 6, 12, 12, 6, 0, -10,
+		-10, 6, 12, 16, 16, 12, 6, -10,
+		-10, 0, 12, 16, 16, 12, 0, -10,
+		-10, 6, 12, 16, 16, 12, 6, -10,
+		-10, 10, 6, 6, 6, 6, 10, -10,
 		-20, -10, -10, -10, -10, -10, -10, -20,
 	}
 
 	pstEnd[White][Rook] = [64]int{
 		0, 0, 0, 0, 0, 0, 0, 0,
-		5, 10, 10, 10, 10, 10, 10, 5,
+		6, 10, 10, 10, 10, 10, 10, 6,
 		-5, 0, 0, 0, 0, 0, 0, -5,
 		-5, 0, 0, 0, 0, 0, 0, -5,
 		-5, 0, 0, 0, 0, 0, 0, -5,
@@ -613,10 +613,10 @@ func initPST() {
 	pstEnd[White][Queen] = [64]int{
 		-20, -10, -10, -5, -5, -10, -10, -20,
 		-10, 0, 0, 0, 0, 0, 0, -10,
-		-10, 0, 5, 5, 5, 5, 0, -10,
-		-5, 0, 5, 5, 5, 5, 0, -5,
-		-5, 0, 5, 5, 5, 5, 0, -5,
-		-10, 0, 5, 5, 5, 5, 0, -10,
+		-10, 0, 4, 4, 4, 4, 0, -10,
+		-5, 0, 4, 4, 4, 4, 0, -5,
+		-5, 0, 4, 4, 4, 4, 0, -5,
+		-10, 0, 4, 4, 4, 4, 0, -10,
 		-10, 0, 0, 0, 0, 0, 0, -10,
 		-20, -10, -10, -5, -5, -10, -10, -20,
 	}
@@ -2678,20 +2678,17 @@ func (p *Position) search(tc *TimeControl) Move {
 // ============================================================================
 func (tc *TimeControl) Stop() {
 	atomic.StoreInt32(&tc.stopped, 1)
-	atomic.StoreInt64(&tc.stopDeadline, 1)
 }
 
 func (tc *TimeControl) allocateTime(side int) {
-	now := time.Now()
 
-	// fixed movetime wins
 	if tc.movetime > 0 {
-		atomic.StoreInt64(&tc.stopDeadline, now.UnixNano()+tc.movetime*int64(time.Millisecond))
+		tc.deadline = time.Now().Add(time.Duration(tc.movetime) * time.Millisecond)
 		return
 	}
-	// depth/infinite = no deadline
+
 	if tc.infinite || tc.depth > 0 {
-		atomic.StoreInt64(&tc.stopDeadline, 0)
+		tc.deadline = time.Time{} // no deadline
 		return
 	}
 
@@ -2702,24 +2699,16 @@ func (tc *TimeControl) allocateTime(side int) {
 		myTime, myInc = tc.btime, tc.binc
 	}
 
-	// no time control = infinite
-	if myTime <= 0 && myInc <= 0 && tc.movestogo == 0 {
-		atomic.StoreInt64(&tc.stopDeadline, 0)
-		return
-	}
-
 	movesToGo := tc.movestogo
 	if movesToGo <= 0 {
 		movesToGo = DefaultMovesToGo
 	}
 
-	// Keep a small, fixed reserve to avoid flagging on latency.
 	usableTime := myTime - reserveMs
 	if usableTime < 0 {
 		usableTime = 0
 	}
 
-	// base allocation per move (ms): cap only banked time, never the increment
 	fromBank := usableTime / int64(movesToGo)
 	capBank := usableTime / perMoveCapDiv
 	if fromBank > capBank {
@@ -2727,36 +2716,43 @@ func (tc *TimeControl) allocateTime(side int) {
 	}
 	baseMs := fromBank + myInc
 
-	// ensure a minimum thinking time, but not if time is critical
 	if baseMs < minThinkMs && (usableTime > 0 || myInc > 0) {
 		baseMs = minThinkMs
 	}
 
-	// compute deadline
-	atomic.StoreInt64(&tc.stopDeadline, now.UnixNano()+baseMs*int64(time.Millisecond))
+	tc.deadline = time.Now().Add(time.Duration(baseMs) * time.Millisecond)
 }
 
 func (tc *TimeControl) shouldStop() bool {
-	if atomic.LoadInt32(&tc.stopped) != 0 { // explicit stop
+	if atomic.LoadInt32(&tc.stopped) != 0 {
 		return true
 	}
-	if tc.infinite || tc.depth > 0 { // ignore deadlines in these modes
+	d := tc.deadline
+	if d.IsZero() {
 		return false
 	}
-	d := atomic.LoadInt64(&tc.stopDeadline)
-	return d != 0 && time.Now().UnixNano() >= d
+	return time.Until(d) <= 0
 }
 
 func (tc *TimeControl) shouldContinue(lastIter time.Duration) bool {
-	if tc.infinite || tc.depth > 0 || lastIter == 0 { // fast outs
+	if atomic.LoadInt32(&tc.stopped) != 0 {
+		return false
+	}
+	// Depth/infinite or no prior iteration: allow.
+	if tc.infinite || tc.depth > 0 || lastIter <= 0 {
 		return true
 	}
-	d := atomic.LoadInt64(&tc.stopDeadline)
-	if d == 0 {
+	// No deadline -> allow.
+	if tc.deadline.IsZero() {
 		return true
 	}
-	left := time.Duration(d - time.Now().UnixNano())
-	return left > lastIter*nextIterMult+continueMargin
+	remain := time.Until(tc.deadline) // monotonic
+	if remain <= 0 {
+		return false
+	}
+
+	// Allow next iteration only if we likely finish it.
+	return remain > lastIter*nextIterMult+continueMargin
 }
 
 // ============================================================================
@@ -2901,7 +2897,7 @@ func uciLoop() {
 				// one, engine stays responsive
 				if cur := currentTC.Load(); cur != nil {
 					cur.Stop()
-					if currentTC.Load() == cur {
+					if currentTC.Load() != nil {
 						fmt.Printf("info string Hash unchanged (search running)\n")
 						continue
 					}
@@ -2916,8 +2912,7 @@ func uciLoop() {
 			}
 
 		case "ucinewgame":
-			pos.setStartPos()
-			if cur := currentTC.Load(); cur != nil {
+			if cur := currentTC.Swap(nil); cur != nil {
 				// do not block the GUI: request stop and skip TT clear if still running
 				cur.Stop()
 				fmt.Printf("info string ucinewgame: search stopping, TT unchanged\n")
@@ -2925,8 +2920,12 @@ func uciLoop() {
 				// safe to clear TT when idle; no need for a lock as only setoption touches TT
 				tt.Clear()
 			}
+			pos.setStartPos()
 
 		case "position":
+			if cur := currentTC.Swap(nil); cur != nil {
+				cur.Stop()
+			}
 			if len(parts) < 2 {
 				fmt.Println("# Error: position requires arguments")
 				continue
@@ -2974,8 +2973,8 @@ func uciLoop() {
 				}
 			}
 		case "go":
-			// Stop any previously running search
-			if cur := currentTC.Load(); cur != nil {
+			// Atomically detach any previous search before starting a new one
+			if cur := currentTC.Swap(nil); cur != nil {
 				cur.Stop()
 			}
 
@@ -3025,10 +3024,9 @@ func uciLoop() {
 			}
 
 			tc.allocateTime(pos.side)
+			pcopy := *pos
 			currentTC.Store(tc)
 
-			// snapshot position for concurrent search
-			pcopy := *pos
 			go runSearchAndReport(&pcopy, tc)
 
 		case "stop":
@@ -3037,7 +3035,7 @@ func uciLoop() {
 			}
 
 		case "quit":
-			if cur := currentTC.Load(); cur != nil {
+			if cur := currentTC.Swap(nil); cur != nil {
 				cur.Stop()
 			}
 			return
