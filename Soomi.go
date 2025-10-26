@@ -2652,6 +2652,17 @@ func (p *Position) search(tc *TimeControl) Move {
 		}
 		fmt.Println()
 
+		// Early exit on proven mate (either side): commit the current PV move.
+		if absScore > Mate-MateScoreGuard {
+			if bestMove != 0 && p.isLegal(bestMove) {
+				return bestMove
+			}
+			if stableBestMove != 0 && p.isLegal(stableBestMove) {
+				return stableBestMove
+			}
+			return 0
+		}
+
 		// Decide whether to stop before the next iteration. Call shouldStop() once
 		if tc.shouldStop() || !tc.shouldContinue(elapsed) {
 			break
