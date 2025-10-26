@@ -2712,7 +2712,7 @@ func (tc *TimeControl) allocateTime(side int) {
 		fromBank = capBank
 	}
 
-	baseMs := fromBank + myInc/perMoveCapDiv
+	baseMs := fromBank + myInc
 
 	// Never think longer than what’s actually left (minus reserve).
 	if baseMs > usableTime {
