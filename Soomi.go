@@ -33,7 +33,7 @@ const (
 
 // -- Search constants
 const (
-	MaxDepth = 64
+	MaxDepth = 32
 	Infinity = 30000
 	Mate     = 29000
 )
@@ -67,7 +67,7 @@ const (
 const defaultTTSizeMB = 256
 
 // -- Cap for LMR
-const maxLMRMoves = 64
+const maxLMRMoves = 32
 
 // -- History size for repetition detection
 const MaxGamePly = 1024
@@ -300,7 +300,7 @@ func initMobility() {
 }
 
 func initPassedPawns() {
-	// Initialize file and rank masks
+	// Initialize file masks
 	for i := 0; i < 8; i++ {
 		fileMask[i] = 0x0101010101010101 << i
 	}
@@ -363,9 +363,6 @@ type ttEntry struct {
 }
 
 func packEntry(move uint32, score int16, gen uint8, depth uint8, flag uint8) uint64 {
-	if depth > 63 {
-		depth = 63
-	}
 	return uint64(move)<<32 | uint64(uint16(score))<<16 | uint64(gen)<<8 | uint64(depth)<<2 | uint64(flag&0x3)
 }
 
@@ -975,10 +972,6 @@ func (p *Position) isAttacked(sq, bySide int) bool {
 
 func (p *Position) inCheck() bool {
 	kingBB := p.pieces[p.side][King]
-	if kingBB == 0 {
-		// Fallback for corrupted position
-		return false
-	}
 	kingSq := bits.TrailingZeros64(uint64(kingBB))
 	return p.isAttacked(kingSq, p.side^1)
 }
@@ -2124,9 +2117,6 @@ func (p *Position) quiesce(alpha, beta, ply int, tc *TimeControl) int {
 			} else {
 				scoreFromTT += ply
 			}
-			if flag != ttFlagExact {
-				usable = false
-			}
 		}
 		// Use score only if exact or within bounds; ignore non-exact mate-like bounds
 		if !(isMate && flag != ttFlagExact) {
@@ -2222,9 +2212,11 @@ func (p *Position) quiesce(alpha, beta, ply int, tc *TimeControl) int {
 		}
 	}
 
-	// Checkmate in quiesce, unlikely but still we need to account for it
+	// Checkmate in quiesce
 	if inCheck && legalCount == 0 {
-		return -Mate + ply
+		score := -Mate + ply                      // node-relative return value
+		tt.Save(p.hash, 0, -Mate, 0, ttFlagExact) // store position-relative
+		return score
 	}
 
 	return best
@@ -2396,6 +2388,8 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 
 		// Check for draws
 		if p.halfmove >= 100 || p.isRepetition() {
+			// Store exact draw for the CHILD position
+			tt.Save(p.hash, 0, 0, depth-1, ttFlagExact)
 			score = 0
 		} else {
 			gaveCheck := p.inCheck()
@@ -2490,12 +2484,21 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 		}
 	}
 
-	// no legal moves -> mate or stalemate. Save stalemate as exact draw in TT.
+	// no legal moves -> mate or stalemate. Store exact result in TT.
 	if legalMoves == 0 {
 		if inCheck {
-			return -Mate + ply
+			score := -Mate + ply // node-relative
+			// encode to position-relative before storing
+			store := score
+			if store > Mate-MateScoreGuard {
+				store += ply
+			} else if store < -Mate+MateScoreGuard {
+				store -= ply
+			}
+			tt.Save(p.hash, 0, store, 63, ttFlagExact) // depth=63 => always usable
+			return score
 		}
-		tt.Save(p.hash, 0, 0, depth, ttFlagExact)
+		tt.Save(p.hash, 0, 0, 63, ttFlagExact)
 		return 0
 	}
 
@@ -2506,14 +2509,10 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 		*pv = append(*pv, bestChildPV...)
 	}
 
-	// --- store in transposition table (exact/lower/upper based on origAlpha)
-	var storeFlag uint8
+	// --- store in transposition table (exact/upper based on origAlpha)
+	flag := ttFlagExact
 	if bestScore <= origAlpha {
-		storeFlag = ttFlagUpper
-	} else if bestScore >= beta {
-		storeFlag = ttFlagLower
-	} else {
-		storeFlag = ttFlagExact
+		flag = ttFlagUpper
 	}
 
 	// Adjust mate scores before storing (root-relative to position-relative)
@@ -2523,7 +2522,7 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 	} else if storeScore < -Mate+MateScoreGuard {
 		storeScore -= ply
 	}
-	tt.Save(p.hash, bestMove, storeScore, depth, storeFlag)
+	tt.Save(p.hash, bestMove, storeScore, depth, flag)
 	return bestScore
 }
 
@@ -2681,14 +2680,12 @@ func (tc *TimeControl) Stop() {
 }
 
 func (tc *TimeControl) allocateTime(side int) {
-
 	if tc.movetime > 0 {
 		tc.deadline = time.Now().Add(time.Duration(tc.movetime) * time.Millisecond)
 		return
 	}
-
 	if tc.infinite || tc.depth > 0 {
-		tc.deadline = time.Time{} // no deadline
+		tc.deadline = time.Time{}
 		return
 	}
 
@@ -2714,10 +2711,21 @@ func (tc *TimeControl) allocateTime(side int) {
 	if fromBank > capBank {
 		fromBank = capBank
 	}
-	baseMs := fromBank + myInc
 
-	if baseMs < minThinkMs && (usableTime > 0 || myInc > 0) {
-		baseMs = minThinkMs
+	baseMs := fromBank + myInc/perMoveCapDiv
+
+	// Never think longer than what’s actually left (minus reserve).
+	if baseMs > usableTime {
+		baseMs = usableTime
+	}
+
+	// Apply a minimum only if there is some bank left, and still respect the cap.
+	if baseMs < minThinkMs && usableTime > 0 {
+		if int64(minThinkMs) < usableTime {
+			baseMs = minThinkMs
+		} else {
+			baseMs = usableTime
+		}
 	}
 
 	tc.deadline = time.Now().Add(time.Duration(baseMs) * time.Millisecond)
