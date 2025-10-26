@@ -338,7 +338,7 @@ func (p *Position) isRepetition() bool {
 	for i := p.historyPly - 2; i >= p.lastIrreversible; i -= 2 {
 		if p.historyKeys[i] == target {
 			count++
-			if count >= 3 {
+			if count >= 2 {
 				return true
 			}
 		}
