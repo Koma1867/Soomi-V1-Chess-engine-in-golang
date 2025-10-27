@@ -2176,6 +2176,9 @@ func (p *Position) quiesce(alpha, beta, ply int, tc *TimeControl) int {
 
 	legalCount := 0
 	for _, m := range moves {
+		if tc.shouldStop() {
+			return alpha
+		}
 		if !p.isLegal(m) {
 			continue
 		}
@@ -2371,6 +2374,9 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 	var childPVBuf [MaxDepth]Move
 
 	for _, m := range moves {
+		if tc.shouldStop() {
+			return alpha
+		}
 		// legality check
 		if !p.isLegal(m) {
 			continue
@@ -2628,7 +2634,7 @@ func (p *Position) search(tc *TimeControl) Move {
 			absScore = -absScore
 		}
 
-		if absScore > Mate-MateScoreGuard { // mate-encoded score
+		if absScore >= Mate-MateScoreGuard { // mate-encoded score
 			// convert plies -> moves for UCI
 			matePly := Mate - absScore     // plies to mate
 			mateMoves := (matePly + 1) / 2 // convert to full moves (ceil(plies/2))
