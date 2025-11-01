@@ -247,6 +247,281 @@ func initPhaseScaled() {
 	}
 }
 
+// ============================================================================
+// MAGIC BITBOARDS
+// ============================================================================
+type MagicEntry struct {
+	mask   Bitboard // Relevant occupancy bits (exclude edges)
+	magic  Bitboard // Magic number for hashing
+	shift  uint8    // Right shift amount
+	offset uint32   // Offset into attack table
+}
+
+var (
+	rookMagics        [64]MagicEntry
+	bishopMagics      [64]MagicEntry
+	rookAttackTable   [102400]Bitboard // Fixed size array for compile-time bounds
+	bishopAttackTable [5248]Bitboard   // Fixed size array for compile-time bounds
+)
+
+// Pre-computed magic numbers for rooks (found by trial and error)
+var rookMagicNumbers = [64]uint64{
+	0x0080001020400080, 0x0040001000200040, 0x0080081000200080, 0x0080040800100080,
+	0x0080020400080080, 0x0080010200040080, 0x0080008001000200, 0x0080002040800100,
+	0x0000800020400080, 0x0000400020005000, 0x0000801000200080, 0x0000800800100080,
+	0x0000800400080080, 0x0000800200040080, 0x0000800100020080, 0x0000800040800100,
+	0x0000208000400080, 0x0000404000201000, 0x0000808010002000, 0x0000808008001000,
+	0x0000808004000800, 0x0000808002000400, 0x0000010100020004, 0x0000020000408104,
+	0x0000208080004000, 0x0000200040005000, 0x0000100080200080, 0x0000080080100080,
+	0x0000040080080080, 0x0000020080040080, 0x0000010080800200, 0x0000800080004100,
+	0x0000204000800080, 0x0000200040401000, 0x0000100080802000, 0x0000080080801000,
+	0x0000040080800800, 0x0000020080800400, 0x0000020001010004, 0x0000800040800100,
+	0x0000204000808000, 0x0000200040008080, 0x0000100020008080, 0x0000080010008080,
+	0x0000040008008080, 0x0000020004008080, 0x0000010002008080, 0x0000004081020004,
+	0x0000204000800080, 0x0000200040008080, 0x0000100020008080, 0x0000080010008080,
+	0x0000040008008080, 0x0000020004008080, 0x0000800100020080, 0x0000800041000080,
+	0x00FFFCDDFCED714A, 0x007FFCDDFCED714A, 0x003FFFCDFFD88096, 0x0000040810002101,
+	0x0001000204080011, 0x0001000204000801, 0x0001000082000401, 0x0001FFFAABFAD1A2,
+}
+
+// Pre-computed magic numbers for bishops
+var bishopMagicNumbers = [64]uint64{
+	0x0002020202020200, 0x0002020202020000, 0x0004010202000000, 0x0004040080000000,
+	0x0001104000000000, 0x0000821040000000, 0x0000410410400000, 0x0000104104104000,
+	0x0000040404040400, 0x0000020202020200, 0x0000040102020000, 0x0000040400800000,
+	0x0000011040000000, 0x0000008210400000, 0x0000004104104000, 0x0000002082082000,
+	0x0004000808080800, 0x0002000404040400, 0x0001000202020200, 0x0000800802004000,
+	0x0000800400A00000, 0x0000200100884000, 0x0000400082082000, 0x0000200041041000,
+	0x0002080010101000, 0x0001040008080800, 0x0000208004010400, 0x0000404004010200,
+	0x0000840000802000, 0x0000404002011000, 0x0000808001041000, 0x0000404000820800,
+	0x0001041000202000, 0x0000820800101000, 0x0000104400080800, 0x0000020080080080,
+	0x0000404040040100, 0x0000808100020100, 0x0001010100020800, 0x0000808080010400,
+	0x0000820820004000, 0x0000410410002000, 0x0000082088001000, 0x0000002011000800,
+	0x0000080100400400, 0x0001010101000200, 0x0002020202000400, 0x0001010101000200,
+	0x0000410410400000, 0x0000208208200000, 0x0000002084100000, 0x0000000020880000,
+	0x0000001002020000, 0x0000040408020000, 0x0004040404040000, 0x0002020202020000,
+	0x0000104104104000, 0x0000002082082000, 0x0000000020841000, 0x0000000000208800,
+	0x0000000010020200, 0x0000000404080200, 0x0000040404040400, 0x0002020202020200,
+}
+
+// Generate relevant occupancy mask for rook (exclude edges)
+func rookMask(sq int) Bitboard {
+	result := Bitboard(0)
+	r, f := sq/8, sq%8
+
+	// Vertical: exclude rank 0 and 7
+	for rr := r + 1; rr <= 6; rr++ {
+		result |= Bitboard(1) << (rr*8 + f)
+	}
+	for rr := r - 1; rr >= 1; rr-- {
+		result |= Bitboard(1) << (rr*8 + f)
+	}
+
+	// Horizontal: exclude file 0 and 7
+	for ff := f + 1; ff <= 6; ff++ {
+		result |= Bitboard(1) << (r*8 + ff)
+	}
+	for ff := f - 1; ff >= 1; ff-- {
+		result |= Bitboard(1) << (r*8 + ff)
+	}
+
+	return result
+}
+
+// Generate relevant occupancy mask for bishop (exclude edges)
+func bishopMask(sq int) Bitboard {
+	result := Bitboard(0)
+	r, f := sq/8, sq%8
+
+	// NE diagonal
+	for rr, ff := r+1, f+1; rr <= 6 && ff <= 6; rr, ff = rr+1, ff+1 {
+		result |= Bitboard(1) << (rr*8 + ff)
+	}
+	// SE diagonal
+	for rr, ff := r-1, f+1; rr >= 1 && ff <= 6; rr, ff = rr-1, ff+1 {
+		result |= Bitboard(1) << (rr*8 + ff)
+	}
+	// SW diagonal
+	for rr, ff := r-1, f-1; rr >= 1 && ff >= 1; rr, ff = rr-1, ff-1 {
+		result |= Bitboard(1) << (rr*8 + ff)
+	}
+	// NW diagonal
+	for rr, ff := r+1, f-1; rr <= 6 && ff >= 1; rr, ff = rr+1, ff-1 {
+		result |= Bitboard(1) << (rr*8 + ff)
+	}
+
+	return result
+}
+
+// Generate all possible occupancy variations from a mask
+func occupancyVariations(mask Bitboard) []Bitboard {
+	// Extract bit positions
+	bits := []int{}
+	for sq := 0; sq < 64; sq++ {
+		if mask&(Bitboard(1)<<sq) != 0 {
+			bits = append(bits, sq)
+		}
+	}
+
+	n := len(bits)
+	count := 1 << n // 2^n variations
+	variations := make([]Bitboard, count)
+
+	// Generate all 2^n combinations
+	for i := 0; i < count; i++ {
+		occ := Bitboard(0)
+		for j := 0; j < n; j++ {
+			if i&(1<<j) != 0 {
+				occ |= Bitboard(1) << bits[j]
+			}
+		}
+		variations[i] = occ
+	}
+
+	return variations
+}
+
+// Calculate magic index from occupancy
+func magicIndex(occ Bitboard, magic Bitboard, shift uint8) uint32 {
+	return uint32((occ * magic) >> shift)
+}
+
+// Initialize magic bitboard tables
+func initMagicBitboards() {
+	// Phase 1: Calculate offsets and populate magic entries
+	rookTableSize := 0
+	bishopTableSize := 0
+
+	for sq := 0; sq < 64; sq++ {
+		// Rook
+		mask := rookMask(sq)
+		bitCount := bits.OnesCount64(uint64(mask))
+		rookMagics[sq].mask = mask
+		rookMagics[sq].magic = Bitboard(rookMagicNumbers[sq])
+		rookMagics[sq].shift = 64 - uint8(bitCount)
+		rookMagics[sq].offset = uint32(rookTableSize)
+		rookTableSize += 1 << bitCount
+
+		// Bishop
+		mask = bishopMask(sq)
+		bitCount = bits.OnesCount64(uint64(mask))
+		bishopMagics[sq].mask = mask
+		bishopMagics[sq].magic = Bitboard(bishopMagicNumbers[sq])
+		bishopMagics[sq].shift = 64 - uint8(bitCount)
+		bishopMagics[sq].offset = uint32(bishopTableSize)
+		bishopTableSize += 1 << bitCount
+	}
+
+	// Phase 2: Tables are now fixed-size arrays (no allocation needed)
+	// rookAttackTable and bishopAttackTable are already allocated as global arrays
+
+	// Phase 3: Fill rook attack table
+	for sq := 0; sq < 64; sq++ {
+		mask := rookMagics[sq].mask
+		variations := occupancyVariations(mask)
+
+		for _, occ := range variations {
+			// Calculate attacks using classical method
+			attacks := rookAttacksClassical(sq, occ)
+			idx := magicIndex(occ, rookMagics[sq].magic, rookMagics[sq].shift)
+			rookAttackTable[rookMagics[sq].offset+idx] = attacks
+		}
+	}
+
+	// Phase 4: Fill bishop attack table
+	for sq := 0; sq < 64; sq++ {
+		mask := bishopMagics[sq].mask
+		variations := occupancyVariations(mask)
+
+		for _, occ := range variations {
+			// Calculate attacks using classical method
+			attacks := bishopAttacksClassical(sq, occ)
+			idx := magicIndex(occ, bishopMagics[sq].magic, bishopMagics[sq].shift)
+			bishopAttackTable[bishopMagics[sq].offset+idx] = attacks
+		}
+	}
+}
+
+// Classical rook attack generation (for table initialization only)
+func rookAttacksClassical(sq int, occ Bitboard) Bitboard {
+	attacks := Bitboard(0)
+	r, f := sq/8, sq%8
+
+	// North (rank increasing)
+	for rr := r + 1; rr < 8; rr++ {
+		attacks |= Bitboard(1) << (rr*8 + f)
+		if occ&(Bitboard(1)<<(rr*8+f)) != 0 {
+			break
+		}
+	}
+
+	// South (rank decreasing)
+	for rr := r - 1; rr >= 0; rr-- {
+		attacks |= Bitboard(1) << (rr*8 + f)
+		if occ&(Bitboard(1)<<(rr*8+f)) != 0 {
+			break
+		}
+	}
+
+	// East (file increasing)
+	for ff := f + 1; ff < 8; ff++ {
+		attacks |= Bitboard(1) << (r*8 + ff)
+		if occ&(Bitboard(1)<<(r*8+ff)) != 0 {
+			break
+		}
+	}
+
+	// West (file decreasing)
+	for ff := f - 1; ff >= 0; ff-- {
+		attacks |= Bitboard(1) << (r*8 + ff)
+		if occ&(Bitboard(1)<<(r*8+ff)) != 0 {
+			break
+		}
+	}
+
+	return attacks
+}
+
+// Classical bishop attack generation (for table initialization only)
+func bishopAttacksClassical(sq int, occ Bitboard) Bitboard {
+	attacks := Bitboard(0)
+	r, f := sq/8, sq%8
+
+	// NE diagonal
+	for rr, ff := r+1, f+1; rr < 8 && ff < 8; rr, ff = rr+1, ff+1 {
+		attacks |= Bitboard(1) << (rr*8 + ff)
+		if occ&(Bitboard(1)<<(rr*8+ff)) != 0 {
+			break
+		}
+	}
+
+	// SE diagonal
+	for rr, ff := r-1, f+1; rr >= 0 && ff < 8; rr, ff = rr-1, ff+1 {
+		attacks |= Bitboard(1) << (rr*8 + ff)
+		if occ&(Bitboard(1)<<(rr*8+ff)) != 0 {
+			break
+		}
+	}
+
+	// SW diagonal
+	for rr, ff := r-1, f-1; rr >= 0 && ff >= 0; rr, ff = rr-1, ff-1 {
+		attacks |= Bitboard(1) << (rr*8 + ff)
+		if occ&(Bitboard(1)<<(rr*8+ff)) != 0 {
+			break
+		}
+	}
+
+	// NW diagonal
+	for rr, ff := r+1, f-1; rr < 8 && ff >= 0; rr, ff = rr+1, ff-1 {
+		attacks |= Bitboard(1) << (rr*8 + ff)
+		if occ&(Bitboard(1)<<(rr*8+ff)) != 0 {
+			break
+		}
+	}
+
+	return attacks
+}
+
 // Precomputed single-bit bitboards for each square, slight speedup over recomputation (1-5 % perft average)
 var sqBB [64]Bitboard
 
@@ -483,6 +758,7 @@ func init() {
 	initZobrist()
 	initSqBB()
 	initAttacks()
+	initMagicBitboards()
 	initPhaseScaled()
 	initMVVLVATable()
 	initLMR()
@@ -863,88 +1139,17 @@ func (p *Position) pieceAt(sq int) (color, piece int, ok bool) {
 // ============================================================================
 // ATTACK GENERATION
 // ============================================================================
-func rookAttacks(sq int, occ Bitboard) Bitboard {
-	var attacks Bitboard
 
-	// up (rank increasing)
-	for idx := sq + 8; idx < 64; idx += 8 {
-		bb := sqBB[idx]
-		attacks |= bb
-		if occ&bb != 0 {
-			break
-		}
-	}
-	// down (rank decreasing)
-	for idx := sq - 8; idx >= 0; idx -= 8 {
-		bb := sqBB[idx]
-		attacks |= bb
-		if occ&bb != 0 {
-			break
-		}
-	}
-	// right (file increasing)
-	// limit = end of rank = (sq/8)*8 + 8
-	r := sq >> 3
-	limit := (r << 3) + 8
-	for idx := sq + 1; idx < limit; idx++ {
-		bb := sqBB[idx]
-		attacks |= bb
-		if occ&bb != 0 {
-			break
-		}
-	}
-	// left (file decreasing)
-	// limit = start of rank = (sq/8)*8
-	limitLeft := r << 3
-	for idx := sq - 1; idx >= limitLeft; idx-- {
-		bb := sqBB[idx]
-		attacks |= bb
-		if occ&bb != 0 {
-			break
-		}
-	}
-	return attacks
+func rookAttacks(sq int, occ Bitboard) Bitboard {
+	m := &rookMagics[sq]
+	idx := uint32(((occ & m.mask) * m.magic) >> m.shift)
+	return rookAttackTable[m.offset+idx]
 }
 
 func bishopAttacks(sq int, occ Bitboard) Bitboard {
-	var attacks Bitboard
-
-	baseR := sq >> 3
-	baseF := sq & 7
-
-	// up-right (+9)
-	for idx, r, f := sq+9, baseR+1, baseF+1; r < 8 && f < 8; idx, r, f = idx+9, r+1, f+1 {
-		bb := sqBB[idx]
-		attacks |= bb
-		if occ&bb != 0 {
-			break
-		}
-	}
-	// down-left (-9)
-	for idx, r, f := sq-9, baseR-1, baseF-1; r >= 0 && f >= 0; idx, r, f = idx-9, r-1, f-1 {
-		bb := sqBB[idx]
-		attacks |= bb
-		if occ&bb != 0 {
-			break
-		}
-	}
-	// up-left (+7)
-	for idx, r, f := sq+7, baseR+1, baseF-1; r < 8 && f >= 0; idx, r, f = idx+7, r+1, f-1 {
-		bb := sqBB[idx]
-		attacks |= bb
-		if occ&bb != 0 {
-			break
-		}
-	}
-	// down-right (-7)
-	for idx, r, f := sq-7, baseR-1, baseF+1; r >= 0 && f < 8; idx, r, f = idx-7, r-1, f+1 {
-		bb := sqBB[idx]
-		attacks |= bb
-		if occ&bb != 0 {
-			break
-		}
-	}
-	return attacks
+	m := &bishopMagics[sq]
+	idx := uint32(((occ & m.mask) * m.magic) >> m.shift)
+	return bishopAttackTable[m.offset+idx]
 }
 
 func (p *Position) isAttacked(sq, bySide int) bool {
@@ -2252,20 +2457,6 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 	}
 
 	inCheck := p.inCheck()
-	// static eval
-	if !inCheck {
-		ss[ply].staticEval = p.evaluate()
-	} else {
-		ss[ply].staticEval = -Infinity
-	}
-	// improving heuristic
-	past := -1
-	if ply >= 2 && ss[ply-2].staticEval != -Infinity {
-		past = ply - 2
-	} else if ply >= 4 && ss[ply-4].staticEval != -Infinity {
-		past = ply - 4
-	}
-	improving := !inCheck && (past < 0 || ss[ply].staticEval > ss[past].staticEval)
 
 	origAlpha := alpha // preserved for TT store decision later
 
@@ -2336,7 +2527,7 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 
 	// ---- Razoring: d=2 reduce by 1 ply, d=1 drop to qsearch (Non-PV) ----
 	if depth <= 2 && pv == nil && !inCheck && alpha > -Mate+MateScoreGuard && alpha < Mate-MateScoreGuard {
-		eval := ss[ply].staticEval
+		eval := p.evaluate()
 		if depth == 2 {
 			if eval <= alpha-Razor2 { // 3.2 pawns
 				if v := p.negamax(depth-1, alpha-1, alpha, ply, nil, tc, ss); v < alpha {
@@ -2421,11 +2612,6 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 					d = len(lmrTable) - 1
 				}
 				red := lmrTable[d][mm]
-
-				// Reduce more aggressively when not improving
-				if !improving {
-					red++
-				}
 
 				// compute effective depth, full search if no room to reduce
 				eff := childDepth - red
