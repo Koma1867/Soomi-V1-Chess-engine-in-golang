@@ -77,8 +77,7 @@ const DeltaMargin = 200
 
 // -- Time management constants
 const (
-	reserveMs      int64         = 100
-	minThinkMs     int64         = 100
+	minTimeMs      int64         = 100
 	perMoveCapDiv  int64         = 2
 	nextIterMult                 = 2
 	continueMargin time.Duration = 10 * time.Millisecond
@@ -142,7 +141,7 @@ const MVVLVAWeight = 100
 const ZobristSeed = 1070372
 
 // -- Moves to go
-const DefaultMovesToGo = 30
+const DefaultMovesToGo = 20
 
 // -- Time check masks
 const (
@@ -202,9 +201,8 @@ type TimeControl struct {
 
 // -- Killer moves for move-ordering and Improving for LMR
 type SearchStack struct {
-	staticEval int
-	killer1    Move
-	killer2    Move
+	killer1 Move
+	killer2 Move
 }
 
 // ============================================================================
@@ -619,6 +617,10 @@ func (p *Position) isRepetition() bool {
 		}
 	}
 	return false
+}
+
+func (p *Position) isDraw() bool {
+	return p.halfmove >= 100 || p.isRepetition()
 }
 
 // ============================================================================
@@ -1169,10 +1171,7 @@ func (p *Position) isAttacked(sq, bySide int) bool {
 		return true
 	}
 	rook := p.pieces[bySide][Rook]
-	if rookAttacks(sq, p.all)&(rook|qu) != 0 {
-		return true
-	}
-	return false
+	return rookAttacks(sq, p.all)&(rook|qu) != 0
 }
 
 func (p *Position) inCheck() bool {
@@ -2294,7 +2293,7 @@ func (p *Position) orderMoves(moves []Move, bestMove, killer1, killer2 Move) []M
 }
 
 // ============================================================================
-// QUISCE
+// QUIESCE
 // ============================================================================
 func (p *Position) quiesce(alpha, beta, ply int, tc *TimeControl) int {
 	p.localNodes++
@@ -2306,8 +2305,7 @@ func (p *Position) quiesce(alpha, beta, ply int, tc *TimeControl) int {
 	}
 
 	// Draw checks
-	if p.halfmove >= 100 || p.isRepetition() {
-		tt.Save(p.hash, 0, 0, 0, ttFlagExact)
+	if p.isDraw() {
 		return 0
 	}
 
@@ -2390,22 +2388,6 @@ func (p *Position) quiesce(alpha, beta, ply int, tc *TimeControl) int {
 		legalCount++
 
 		undo := p.makeMove(m)
-		// draw created by this move?
-		if p.halfmove >= 100 || p.isRepetition() {
-			// store exact 0 for the child position before undo
-			tt.Save(p.hash, 0, 0, 0, ttFlagExact)
-			p.unmakeMove(m, undo)
-			if 0 >= beta {
-				return beta
-			}
-			if 0 > best {
-				best = 0
-			}
-			if 0 > alpha {
-				alpha = 0
-			}
-			continue
-		}
 		score := -p.quiesce(-beta, -alpha, ply+1, tc)
 		p.unmakeMove(m, undo)
 
@@ -2446,8 +2428,7 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 
 	// Early draw return, ensure depth is 0
 	// to not allow pruning with draw entries
-	if p.halfmove >= 100 || p.isRepetition() {
-		tt.Save(p.hash, 0, 0, 0, ttFlagExact)
+	if p.isDraw() {
 		return 0
 	}
 
@@ -2526,17 +2507,17 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 	}
 
 	// ---- Razoring: d=2 reduce by 1 ply, d=1 drop to qsearch (Non-PV) ----
-	if depth <= 2 && pv == nil && !inCheck && alpha > -Mate+MateScoreGuard && alpha < Mate-MateScoreGuard {
+	if depth <= 2 && pv == nil && !inCheck && hashMove == 0 && alpha > -Mate+MateScoreGuard && alpha < Mate-MateScoreGuard {
 		eval := p.evaluate()
 		if depth == 2 {
 			if eval <= alpha-Razor2 { // 3.2 pawns
-				if v := p.negamax(depth-1, alpha-1, alpha, ply, nil, tc, ss); v < alpha {
+				if v := p.negamax(depth-1, alpha-1, alpha, ply+1, nil, tc, ss); v < alpha {
 					return v
 				}
 			}
 		} else {
 			if eval <= alpha-Razor1 { // 2.56 pawns
-				if v := p.quiesce(alpha-1, alpha, ply, tc); v < alpha {
+				if v := p.quiesce(alpha-1, alpha, ply+1, tc); v < alpha {
 					return v
 				}
 			}
@@ -2582,52 +2563,55 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 			pvPtr = &childPV // PV child gets a PV buffer
 		}
 		var score int
+		gaveCheck := p.inCheck()
 
-		// Check for draws
-		if p.halfmove >= 100 || p.isRepetition() {
-			// Store exact draw for the CHILD position
-			tt.Save(p.hash, 0, 0, depth-1, ttFlagExact)
-			score = 0
-		} else {
-			gaveCheck := p.inCheck()
-
-			// base child depth
-			childDepth := depth - 1
-			// -------------------------
-			// Late Move Reduction (LMR)
-			// -------------------------
-			canReduce := childDepth >= LMRMinChildDepth &&
-				!inCheck && !gaveCheck &&
-				!m.isCapture() && !m.isPromo() &&
-				m != hashMove && moveNum > LMRLateMoveAfter
-
-			if canReduce {
-				mm := moveNum
-				if mm >= maxLMRMoves {
-					mm = maxLMRMoves
-				}
-				// base reduction from table: index by remaining depth (clamped)
-				d := childDepth
-				if d >= len(lmrTable) {
-					d = len(lmrTable) - 1
-				}
-				red := lmrTable[d][mm]
-
-				// compute effective depth, full search if no room to reduce
-				eff := childDepth - red
-				if eff < 1 {
-					// full search
-					score = -p.negamax(childDepth, -beta, -alpha, ply+1, pvPtr, tc, ss)
-				} else {
-					// reduced null-window, then re-search on raise
-					score = -p.negamax(eff, -alpha-1, -alpha, ply+1, nil, tc, ss)
-					if score > alpha {
-						score = -p.negamax(childDepth, -beta, -alpha, ply+1, pvPtr, tc, ss)
-					}
-				}
-			} else {
-				score = -p.negamax(childDepth, -beta, -alpha, ply+1, pvPtr, tc, ss)
+		// base child depth
+		childDepth := depth - 1
+		// -------------------------
+		// Late Move Reduction (LMR)
+		// -------------------------
+		// Do not reduce in PV nodes or for killer moves.
+		// Conservative: require childDepth, not in check, not giving check,
+		// not a capture/promotion, not the hash move, and late move index.
+		isKiller := false
+		if ply < len(ss) {
+			k := &ss[ply]
+			if m == k.killer1 || m == k.killer2 {
+				isKiller = true
 			}
+		}
+		canReduce := childDepth >= LMRMinChildDepth &&
+			!inCheck && !gaveCheck &&
+			!m.isCapture() && !m.isPromo() &&
+			m != hashMove && moveNum > LMRLateMoveAfter &&
+			!pvNode && !isKiller
+		if canReduce {
+			mm := moveNum
+			if mm > maxLMRMoves {
+				mm = maxLMRMoves
+			}
+			// base reduction from table: index by remaining depth (clamped)
+			d := childDepth
+			if d >= len(lmrTable) {
+				d = len(lmrTable) - 1
+			}
+			red := lmrTable[d][mm]
+
+			// compute effective depth, full search if no room to reduce
+			eff := childDepth - red
+			if eff < 1 {
+				// full search
+				score = -p.negamax(childDepth, -beta, -alpha, ply+1, pvPtr, tc, ss)
+			} else {
+				// reduced null-window, then re-search on raise
+				score = -p.negamax(eff, -alpha-1, -alpha, ply+1, nil, tc, ss)
+				if score > alpha {
+					score = -p.negamax(childDepth, -beta, -alpha, ply+1, pvPtr, tc, ss)
+				}
+			}
+		} else {
+			score = -p.negamax(childDepth, -beta, -alpha, ply+1, pvPtr, tc, ss)
+
 		}
 
 		// unmake after both reduced and possible re-search
@@ -2849,7 +2833,7 @@ func (p *Position) search(tc *TimeControl) Move {
 			if bestMove != 0 && p.isLegal(bestMove) {
 				return bestMove
 			}
-			return 0
+			break
 		}
 
 		// Decide whether to stop before the next iteration. Call shouldStop() once
@@ -2901,7 +2885,7 @@ func (tc *TimeControl) allocateTime(side int) {
 		movesToGo = DefaultMovesToGo
 	}
 
-	usableTime := myTime - reserveMs
+	usableTime := myTime - minTimeMs
 	if usableTime < 0 {
 		usableTime = 0
 	}
@@ -2920,9 +2904,9 @@ func (tc *TimeControl) allocateTime(side int) {
 	}
 
 	// Apply a minimum only if there is some bank left, and still respect the cap.
-	if baseMs < minThinkMs && usableTime > 0 {
-		if int64(minThinkMs) < usableTime {
-			baseMs = minThinkMs
+	if baseMs < minTimeMs && usableTime > 0 {
+		if minTimeMs < usableTime {
+			baseMs = minTimeMs
 		} else {
 			baseMs = usableTime
 		}
@@ -3378,3 +3362,6 @@ func main() {
 
 // To make an executable
 // go build -o Soomi.exe soomi.go
+
+// Smaller one in powershell
+// go build -trimpath -ldflags "-s -w" -o Soomi.exe soomi.go
