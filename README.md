@@ -1,4 +1,6 @@
-<img width="624" height="468" alt="fi-06" src="https://github.com/user-attachments/assets/20177914-6959-425f-aa2a-53f6dce76aef" />
+![pexels-mtk402-2004391](https://github.com/user-attachments/assets/e350b3c8-aa0b-4dab-8e0e-21019a21234b)
+
+
 # Soomi — Minimal Chess Engine (Go)
 
 Soomi is a small, educational chess engine written in Go. It implements core chess-engine techniques (bitboards, negamax search, quiescence, TT, simple evaluation) as a learning project rather than a competitive engine.
