@@ -1,42 +1,34 @@
-# Soomi-V1-Chess-engine-in-golang
-A chess engine written in golang, following basic chess programming principles from chess programming wiki.
+# Soomi — Minimal Chess Engine (Go)
 
-Features:
+Soomi is a small, educational chess engine written in Go. It implements core chess-engine techniques (bitboards, negamax search, quiescence, TT, simple evaluation) as a learning project rather than a competitive engine.
 
-- Move generation using bitboards
+## Features
+- Bitboard move generation (now magic) 
+- Evaluation: material, piece-square tables, mobility, passed pawns; middlegame ↔ endgame interpolation (phase blend)  
+- Move ordering: hash move, promotions, MVV-LVA captures, killers  
+- Quiescence search with delta pruning 
+- Transposition table (TT)  
+- Negamax search with alpha-beta, late-move reductions (LMR), razoring, mate-distance pruning  
+- UCI loop (works with Arena and other GUIs)  
+- Iterative deepening with depth-based aspiration windows  
+- Simple time control
 
-- Evaluation of material, piece square tables, piece mobility and passed pawns.
-  Evaluation is interpolated between endgame and middlegame using fruits phase blending.
+## Limitations
+- No FEN parsing (input/output limited)  
+- No pondering / no multi-threading (single-threaded)  
+- Basic move ordering and evaluation (hand-tuned)  
+- Intended for learning and experimentation, not overly optimized for strength
 
-- Move ordering is simple of Hash move first, then promotions, captures sorted by MVV-LVA, and lastly killer moves.
+## Build & Run
+1. Install Go (1.20+ recommended): https://go.dev/doc/install  
+2. Into terminal paste either:
+3. go build -o Soomi.exe soomi.go (provides normal, about 2500kb)
+4. go build -trimpath -ldflags "-s -w" -o Soomi.exe soomi.go (smaller, about 1700 kb)
 
-- Quiescence features delta pruning, and capture only generation unless in check.
+Any suggestions are welcome on how to improve the engine.
+License is completely free to distribute as long as you mention the origin.
 
-- Transposition table
-
-- Negamax with Late Move Reductions, Razoring, Mate distance Pruning and Alpha Beta Pruning.
-
-- Uci Loop to handle GUIs, Works atleast with Arena GUI.
-
-- Search function to find best move using iterative deepening with depth based aspiration windows.
-
-- Simple time control.
-
-Limitations:
-
-- No fen parsing.
-- No pondering.
-- Single threaded.
-- Move ordering is basic.
-- Evaluation terms are hand picked.
-
-What made me build this engine and why in golang:
-
-- Golang because its really the only coding language i know how to write, other than python.
-- What made me write this was the fascination of original chess engines, strenght is not really that important to me, i value originality and doing something myself than copying from everyone else.
-- But i do have to say the chess programming wiki has been a great help, without them i would have never got the engine this far, so thanks to everyone over there if they are reading this.
-
-  To Note: Sometimes antivirus says the executable is a virus, if you want to use the file antivirus has to be switched off or you have to build the file yourself inside terminal.
-  You have to first download golang from https://go.dev/doc/install and then in terminal navigate to where Soomi.go file is and type "go build -o Soomi.exe soomi.go" 
-
-
+Thanks to:
+Maksim Korzh for the mention on his BBC (BitBoard Chess) engines github page:
+https://github.com/maksimKorzh/bbc?tab=readme-ov-file
+Chess programming wiki for awesome and plentiful information
