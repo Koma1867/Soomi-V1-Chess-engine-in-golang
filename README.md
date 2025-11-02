@@ -29,6 +29,5 @@ Any suggestions are welcome on how to improve the engine.
 License is completely free to distribute as long as you mention the origin.
 
 Thanks to:
-Maksim Korzh for the mention on his BBC (BitBoard Chess) engines github page:
-https://github.com/maksimKorzh/bbc?tab=readme-ov-file
-Chess programming wiki for awesome and plentiful information
+- Maksim Korzh for the mention on his BBC (BitBoard Chess) engines github page: https://github.com/maksimKorzh/bbc?tab=readme-ov-file
+- Chess programming wiki for awesome and plentiful information
