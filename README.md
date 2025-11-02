@@ -1,6 +1,3 @@
-![pexels-mtk402-2004391](https://github.com/user-attachments/assets/e350b3c8-aa0b-4dab-8e0e-21019a21234b)
-
-
 # Soomi — Minimal Chess Engine (Go)
 
 Soomi is a small, educational chess engine written in Go. It implements core chess-engine techniques (bitboards, negamax search, quiescence, TT, simple evaluation) as a learning project rather than a competitive engine.
@@ -23,7 +20,7 @@ Soomi is a small, educational chess engine written in Go. It implements core che
 - Intended for learning and experimentation, not overly optimized for strength
 
 ## Build & Run
-1. Install Go (1.20+ recommended): https://go.dev/doc/install  
+1. Install Go (1.20+ recommended, dont know combatibility with older versions): https://go.dev/doc/install  
 2. Into terminal paste either:
 3. go build -o Soomi.exe soomi.go (provides normal, about 2500kb)
 4. go build -trimpath -ldflags "-s -w" -o Soomi.exe soomi.go (smaller, about 1700 kb)
