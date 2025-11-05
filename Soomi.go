@@ -12,6 +12,21 @@ import (
 	"time"
 )
 
+/*
+Package Soomi implements a UCI-compliant chess engine in Go.
+
+Key features:
+- Magic bitboard move generation
+- Alpha-beta search with principal variation
+- Transposition table with replacement strategies
+- Late move reductions and null move pruning
+- Comprehensive evaluation with mobility and king safety
+- UCI protocol support with time management
+
+The engine uses a bitboard representation for efficient move generation
+and evaluation, with sophisticated search algorithms for strong play.
+*/
+
 // ============================================================================
 // CONSTANTS
 // ============================================================================
@@ -33,9 +48,31 @@ const (
 
 // -- Search constants
 const (
-	MaxDepth = 32
-	Infinity = 30000
-	Mate     = 29000
+	MaxDepth             = 32
+	Infinity             = 30000
+	MateValue            = 29000
+	Mate                 = MateValue
+	AspirationBase       = 30
+	AspirationStep       = 3
+	AspirationStartDepth = 5
+	DefaultMovesToGo     = 30
+	NodeCheckMaskSearch  = 2047
+	Razor2               = 320
+	Razor1               = 256
+	DeltaMargin          = 200
+	maxLMRMoves          = 32
+	LMRMinChildDepth     = 3
+	LMRLateMoveAfter     = 2
+	MateScoreGuard       = 1000
+	MateLikeThreshold    = Mate - MateScoreGuard
+)
+
+// -- Time management constants
+const (
+	minTimeMs      int64         = 10
+	perMoveCapDiv  int64         = 2
+	nextIterMult                 = 3
+	continueMargin time.Duration = 10 * time.Millisecond
 )
 
 // -- Move flags
@@ -54,6 +91,16 @@ const (
 	FlagPromoCQ = 15
 )
 
+// Score buckets for ordering
+const (
+	scoreHash            = 1000000
+	scorePromoBase       = 900000
+	scoreCaptureBase     = 800000
+	scoreKiller1         = 750000
+	scoreKiller2         = 740000
+	scoreFallbackCapture = 700000
+)
+
 // -- Transposition table flags
 const (
 	ttFlagExact uint8 = 0
@@ -62,91 +109,110 @@ const (
 )
 
 // -- TT size
-// Default transposition table size in megabytes. This is a reasonable default for
-// modern systems with several GB of RAM. Can be overridden via UCI "Hash" option.
+// Can be overridden via UCI "Hash" option.
 const defaultTTSizeMB = 256
-
-// -- Cap for LMR
-const maxLMRMoves = 32
 
 // -- History size for repetition detection
 const MaxGamePly = 1024
 
-// -- Delta pruning for quiesce
-const DeltaMargin = 200
-
-// -- Time management constants
-const (
-	minTimeMs      int64         = 100
-	perMoveCapDiv  int64         = 2
-	nextIterMult                 = 2
-	continueMargin time.Duration = 10 * time.Millisecond
-)
-
-// -- Razoring constants
-const (
-	Razor2 = 320
-	Razor1 = 256
-)
-
-// -- Mate guard
-const MateScoreGuard = 1000
-const MateLikeThreshold = Mate - MateScoreGuard
-
-// -- LMR
-const (
-	// LMRMinChildDepth is the minimum remaining depth required to apply Late Move Reductions.
-	// Moves are only reduced when the child node will be searched to at least this depth.
-	LMRMinChildDepth = 3
-	// LMRLateMoveAfter defines which moves are "late" for LMR purposes.
-	// Moves after this index (3rd move onward) are candidates for reduction.
-	LMRLateMoveAfter = 2
-)
-
-// -- Mobility
+// -- Evaluation constants
 const (
 	KnightMobZeroPoint = 4
 	KnightMobCpPerMove = 3
-
 	BishopMobZeroPoint = 7
-	BishopMobCpPerMove = 3
+	BishopMobCpPerMove = 2
+	RookMobZeroPoint   = 7
+	RookMobCpPerMove   = 2
+	QueenMobZeroPoint  = 14
+	QueenMobCpPerMove  = 1
+	EgMobCpPerMove     = 2
+	SafetyTableSize    = 100
+	KnightAttackWeight = 2
+	BishopAttackWeight = 2
+	RookAttackWeight   = 3
+	QueenAttackWeight  = 5
+	PhaseScale         = 256
+	MVVLVAWeight       = 100
+)
 
-	RookMobZeroPoint = 7
-	RookMobCpPerMove = 2
+// Fruit-style phase weights for interpolation
+var piecePhase = [6]int{0, 1, 1, 2, 4, 0}
+var totalPhase = piecePhase[Pawn]*16 + piecePhase[Knight]*4 + piecePhase[Bishop]*4 + piecePhase[Rook]*4 + piecePhase[Queen]*2
 
-	QueenMobZeroPoint = 14
-	QueenMobCpPerMove = 1
-
-	EgMobCpPerMove = 3 // endgame mobility slope for all pieces
+// piece values and piece-square tables
+var (
+	pieceValues = [6]int{100, 320, 330, 500, 950, 20000}
+	pst         [2][6][64]int
+	pstEnd      [2][6][64]int
 )
 
 // -- Passed pawns
 var (
-	PassedPawnMG = [8]int{0, 8, 18, 32, 52, 80, 120, 0}
-	PassedPawnEG = [8]int{0, 12, 28, 52, 88, 140, 220, 0}
+	PassedPawnMG = [8]int{0, 5, 12, 22, 36, 56, 84, 0}
+	PassedPawnEG = [8]int{0, 8, 20, 36, 62, 98, 154, 0}
 )
-
-// -- Aspiration window
-const AspirationBase = 30
-const AspirationStep = 3
-const AspirationStartDepth = 5
-
-// -- Phase scaling
-const PhaseScale = 256
-
-// -- MVV-LVA
-const MVVLVAWeight = 100
 
 // -- Zobrist seed
 const ZobristSeed = 1070372
 
-// -- Moves to go
-const DefaultMovesToGo = 20
-
-// -- Time check masks
-const (
-	NodeCheckMaskSearch = 2047
+var (
+	currentTC atomic.Pointer[TimeControl]
+	tt        *TranspositionTable
 )
+
+type MagicEntry struct {
+	mask   Bitboard // Relevant occupancy bits (exclude edges)
+	magic  Bitboard // Magic number for hashing
+	shift  uint8    // Right shift amount
+	offset uint32   // Offset into attack table
+}
+
+var (
+	rookMagics        [64]MagicEntry
+	bishopMagics      [64]MagicEntry
+	rookAttackTable   [102400]Bitboard // Fixed size array for compile-time bounds
+	bishopAttackTable [5248]Bitboard   // Fixed size array for compile-time bounds
+)
+
+// Pre-computed magic numbers for rooks
+var rookMagicNumbers = [64]uint64{
+	0x0080001020400080, 0x0040001000200040, 0x0080081000200080, 0x0080040800100080,
+	0x0080020400080080, 0x0080010200040080, 0x0080008001000200, 0x0080002040800100,
+	0x0000800020400080, 0x0000400020005000, 0x0000801000200080, 0x0000800800100080,
+	0x0000800400080080, 0x0000800200040080, 0x0000800100020080, 0x0000800040800100,
+	0x0000208000400080, 0x0000404000201000, 0x0000808010002000, 0x0000808008001000,
+	0x0000808004000800, 0x0000808002000400, 0x0000010100020004, 0x0000020000408104,
+	0x0000208080004000, 0x0000200040005000, 0x0000100080200080, 0x0000080080100080,
+	0x0000040080080080, 0x0000020080040080, 0x0000010080800200, 0x0000800080004100,
+	0x0000204000800080, 0x0000200040401000, 0x0000100080802000, 0x0000080080801000,
+	0x0000040080800800, 0x0000020080800400, 0x0000020001010004, 0x0000800040800100,
+	0x0000204000808000, 0x0000200040008080, 0x0000100020008080, 0x0000080010008080,
+	0x0000040008008080, 0x0000020004008080, 0x0000010002008080, 0x0000004081020004,
+	0x0000204000800080, 0x0000200040008080, 0x0000100020008080, 0x0000080010008080,
+	0x0000040008008080, 0x0000020004008080, 0x0000800100020080, 0x0000800041000080,
+	0x00FFFCDDFCED714A, 0x007FFCDDFCED714A, 0x003FFFCDFFD88096, 0x0000040810002101,
+	0x0001000204080011, 0x0001000204000801, 0x0001000082000401, 0x0001FFFAABFAD1A2,
+}
+
+// Pre-computed magic numbers for bishops
+var bishopMagicNumbers = [64]uint64{
+	0x0002020202020200, 0x0002020202020000, 0x0004010202000000, 0x0004040080000000,
+	0x0001104000000000, 0x0000821040000000, 0x0000410410400000, 0x0000104104104000,
+	0x0000040404040400, 0x0000020202020200, 0x0000040102020000, 0x0000040400800000,
+	0x0000011040000000, 0x0000008210400000, 0x0000004104104000, 0x0000002082082000,
+	0x0004000808080800, 0x0002000404040400, 0x0001000202020200, 0x0000800802004000,
+	0x0000800400A00000, 0x0000200100884000, 0x0000400082082000, 0x0000200041041000,
+	0x0002080010101000, 0x0001040008080800, 0x0000208004010400, 0x0000404004010200,
+	0x0000840000802000, 0x0000404002011000, 0x0000808001041000, 0x0000404000820800,
+	0x0001041000202000, 0x0000820800101000, 0x0000104400080800, 0x0000020080080080,
+	0x0000404040040100, 0x0000808100020100, 0x0001010100020800, 0x0000808080010400,
+	0x0000820820004000, 0x0000410410002000, 0x0000082088001000, 0x0000002011000800,
+	0x0000080100400400, 0x0001010101000200, 0x0002020202000400, 0x0001010101000200,
+	0x0000410410400000, 0x0000208208200000, 0x0000002084100000, 0x0000000020880000,
+	0x0000001002020000, 0x0000040408020000, 0x0004040404040000, 0x0002020202020000,
+	0x0000104104104000, 0x0000002082082000, 0x0000000020841000, 0x0000000000208800,
+	0x0000000010020200, 0x0000000404080200, 0x0000040404040400, 0x0002020202020200,
+}
 
 // ============================================================================
 // TYPES
@@ -167,7 +233,6 @@ type Position struct {
 	material         [2]int
 	psqScore         [2]int
 	psqScoreEG       [2]int
-	phase            int
 	square           [64]int
 	historyKeys      [MaxGamePly]uint64
 	historyPly       int
@@ -208,11 +273,9 @@ type SearchStack struct {
 // ============================================================================
 // EVALUATION / PST / PHASE DATA / LMR
 // ============================================================================
-// piece values and piece-square tables
 var (
-	pieceValues = [6]int{100, 320, 330, 500, 950, 20000}
-	pst         [2][6][64]int
-	pstEnd      [2][6][64]int
+	safetyTable  [SafetyTableSize]int
+	kingZoneMask [2][64]Bitboard // [color][kingSq] -> zone
 )
 
 // Mobility
@@ -231,77 +294,83 @@ var (
 	fileMask          [8]Bitboard // Masks for each file
 )
 
-// Fruit-style phase weights for interpolation
-var piecePhase = [6]int{0, 1, 1, 2, 4, 0}
-var totalPhase = piecePhase[Pawn]*16 + piecePhase[Knight]*4 + piecePhase[Bishop]*4 + piecePhase[Rook]*4 + piecePhase[Queen]*2
+func (p *Position) computePhase() int {
+	rem := 0
+	for pt := Knight; pt <= Queen; pt++ {
+		bb := p.pieces[White][pt] | p.pieces[Black][pt]
+		rem += bits.OnesCount64(uint64(bb)) * piecePhase[pt]
+	}
+	ph := totalPhase - rem
+	if ph < 0 {
+		return 0
+	}
+	if ph > totalPhase {
+		return totalPhase
+	}
+	return ph
+}
 
-// Phase lookup table
-var phaseScaledTbl []int
+// Add this function after computePhase in your Position methods
+func (p *Position) isEndgame() bool {
+	phase := p.computePhase()
+	return phase < totalPhase/4 // Endgame when phase < 25% of total
+}
 
-func initPhaseScaled() {
-	phaseScaledTbl = make([]int, totalPhase+1)
-	for ph := 0; ph <= totalPhase; ph++ {
-		phaseScaledTbl[ph] = ((totalPhase-ph)*PhaseScale + totalPhase/2) / totalPhase
+func phaseScale(ph int) int {
+	return ((totalPhase-ph)*PhaseScale + totalPhase/2) / totalPhase
+}
+
+// Initialize safety table (call this in init())
+func initSafetyTable() {
+	for i := 0; i < SafetyTableSize; i++ {
+		// Quadratic scaling: attacks become exponentially more dangerous
+		safetyTable[i] = (i * i) / 4
+		// Cap very high attacks to avoid extreme scores
+		if safetyTable[i] > 150 {
+			safetyTable[i] = 150
+		}
+	}
+}
+
+// Initialize king zone masks (call this in init())
+func initKingZoneMasks() {
+	for sq := 0; sq < 64; sq++ {
+		// Base zone: king's 3x3 neighborhood (same for both colors)
+		baseZone := kingAttacks[sq] | sqBB[sq] // Include king's square
+
+		r := sq / 8
+
+		// Calculate WHITE king zone (add squares north)
+		whiteZone := baseZone
+		if r < 6 { // Can add up to 3 squares ahead
+			whiteZone |= sqBB[sq+8]
+			if r < 5 {
+				whiteZone |= sqBB[sq+16]
+			}
+			if r < 4 {
+				whiteZone |= sqBB[sq+24]
+			}
+		}
+		kingZoneMask[White][sq] = whiteZone
+
+		// Calculate BLACK king zone (add squares south) - START FRESH from baseZone
+		blackZone := baseZone
+		if r > 1 { // Can add up to 3 squares ahead
+			blackZone |= sqBB[sq-8]
+			if r > 2 {
+				blackZone |= sqBB[sq-16]
+			}
+			if r > 3 {
+				blackZone |= sqBB[sq-24]
+			}
+		}
+		kingZoneMask[Black][sq] = blackZone
 	}
 }
 
 // ============================================================================
 // MAGIC BITBOARDS
 // ============================================================================
-type MagicEntry struct {
-	mask   Bitboard // Relevant occupancy bits (exclude edges)
-	magic  Bitboard // Magic number for hashing
-	shift  uint8    // Right shift amount
-	offset uint32   // Offset into attack table
-}
-
-var (
-	rookMagics        [64]MagicEntry
-	bishopMagics      [64]MagicEntry
-	rookAttackTable   [102400]Bitboard // Fixed size array for compile-time bounds
-	bishopAttackTable [5248]Bitboard   // Fixed size array for compile-time bounds
-)
-
-// Pre-computed magic numbers for rooks (found by trial and error)
-var rookMagicNumbers = [64]uint64{
-	0x0080001020400080, 0x0040001000200040, 0x0080081000200080, 0x0080040800100080,
-	0x0080020400080080, 0x0080010200040080, 0x0080008001000200, 0x0080002040800100,
-	0x0000800020400080, 0x0000400020005000, 0x0000801000200080, 0x0000800800100080,
-	0x0000800400080080, 0x0000800200040080, 0x0000800100020080, 0x0000800040800100,
-	0x0000208000400080, 0x0000404000201000, 0x0000808010002000, 0x0000808008001000,
-	0x0000808004000800, 0x0000808002000400, 0x0000010100020004, 0x0000020000408104,
-	0x0000208080004000, 0x0000200040005000, 0x0000100080200080, 0x0000080080100080,
-	0x0000040080080080, 0x0000020080040080, 0x0000010080800200, 0x0000800080004100,
-	0x0000204000800080, 0x0000200040401000, 0x0000100080802000, 0x0000080080801000,
-	0x0000040080800800, 0x0000020080800400, 0x0000020001010004, 0x0000800040800100,
-	0x0000204000808000, 0x0000200040008080, 0x0000100020008080, 0x0000080010008080,
-	0x0000040008008080, 0x0000020004008080, 0x0000010002008080, 0x0000004081020004,
-	0x0000204000800080, 0x0000200040008080, 0x0000100020008080, 0x0000080010008080,
-	0x0000040008008080, 0x0000020004008080, 0x0000800100020080, 0x0000800041000080,
-	0x00FFFCDDFCED714A, 0x007FFCDDFCED714A, 0x003FFFCDFFD88096, 0x0000040810002101,
-	0x0001000204080011, 0x0001000204000801, 0x0001000082000401, 0x0001FFFAABFAD1A2,
-}
-
-// Pre-computed magic numbers for bishops
-var bishopMagicNumbers = [64]uint64{
-	0x0002020202020200, 0x0002020202020000, 0x0004010202000000, 0x0004040080000000,
-	0x0001104000000000, 0x0000821040000000, 0x0000410410400000, 0x0000104104104000,
-	0x0000040404040400, 0x0000020202020200, 0x0000040102020000, 0x0000040400800000,
-	0x0000011040000000, 0x0000008210400000, 0x0000004104104000, 0x0000002082082000,
-	0x0004000808080800, 0x0002000404040400, 0x0001000202020200, 0x0000800802004000,
-	0x0000800400A00000, 0x0000200100884000, 0x0000400082082000, 0x0000200041041000,
-	0x0002080010101000, 0x0001040008080800, 0x0000208004010400, 0x0000404004010200,
-	0x0000840000802000, 0x0000404002011000, 0x0000808001041000, 0x0000404000820800,
-	0x0001041000202000, 0x0000820800101000, 0x0000104400080800, 0x0000020080080080,
-	0x0000404040040100, 0x0000808100020100, 0x0001010100020800, 0x0000808080010400,
-	0x0000820820004000, 0x0000410410002000, 0x0000082088001000, 0x0000002011000800,
-	0x0000080100400400, 0x0001010101000200, 0x0002020202000400, 0x0001010101000200,
-	0x0000410410400000, 0x0000208208200000, 0x0000002084100000, 0x0000000020880000,
-	0x0000001002020000, 0x0000040408020000, 0x0004040404040000, 0x0002020202020000,
-	0x0000104104104000, 0x0000002082082000, 0x0000000020841000, 0x0000000000208800,
-	0x0000000010020200, 0x0000000404080200, 0x0000040404040400, 0x0002020202020200,
-}
-
 // Generate relevant occupancy mask for rook (exclude edges)
 func rookMask(sq int) Bitboard {
 	result := Bitboard(0)
@@ -520,7 +589,6 @@ func bishopAttacksClassical(sq int, occ Bitboard) Bitboard {
 	return attacks
 }
 
-// Precomputed single-bit bitboards for each square, slight speedup over recomputation (1-5 % perft average)
 var sqBB [64]Bitboard
 
 func initSqBB() {
@@ -532,6 +600,10 @@ func initSqBB() {
 // precomputed LMR reductions
 var lmrTable [][]int
 
+// initLMR initializes the Late Move Reduction table.
+// LMR Table: [depth][move_number] -> reduction
+// Indexing: depth 0-MaxDepth, moves 0-maxLMRMoves
+// Only moves 3+ get reductions (1-2 are never reduced)
 func initLMR() {
 	maxD := MaxDepth
 	rows := maxD + 1
@@ -542,13 +614,12 @@ func initLMR() {
 		offset := d * rowLen
 		lmrTable[d] = flat[offset : offset+rowLen]
 		if d >= LMRMinChildDepth {
-			depthBonus := 0
-			if d > LMRMinChildDepth {
-				depthBonus = (d - LMRMinChildDepth) / 10
+			depthBonus := (d - LMRMinChildDepth) / 10
+			if d <= LMRMinChildDepth {
+				depthBonus = 0
 			}
 			for m := 3; m <= maxLMRMoves; m++ {
-				moveBonus := (m - 3) / 6
-				lmrTable[d][m] = 1 + depthBonus + moveBonus
+				lmrTable[d][m] = 1 + depthBonus + (m-3)/6
 			}
 		}
 	}
@@ -596,7 +667,7 @@ var (
 	knightAttacks   [64]Bitboard
 	kingAttacks     [64]Bitboard
 	pawnAttacks     [2][64]Bitboard
-	mvvLva          [6][6]int
+	mvvLvaFlat      [36]int
 )
 
 // ============================================================================
@@ -622,14 +693,6 @@ func (p *Position) isRepetition() bool {
 func (p *Position) isDraw() bool {
 	return p.halfmove >= 100 || p.isRepetition()
 }
-
-// ============================================================================
-// RUNTIME GLOBALS
-// ============================================================================
-var (
-	currentTC atomic.Pointer[TimeControl]
-	tt        *TranspositionTable
-)
 
 // ============================================================================
 // TRANSPOSITION TABLE TYPES & HELPERS
@@ -761,11 +824,12 @@ func init() {
 	initSqBB()
 	initAttacks()
 	initMagicBitboards()
-	initPhaseScaled()
 	initMVVLVATable()
 	initLMR()
 	initMobility()
 	initPassedPawns()
+	initSafetyTable()
+	initKingZoneMasks()
 	InitTT(defaultTTSizeMB)
 }
 
@@ -989,11 +1053,23 @@ func initAttacks() {
 }
 
 func initMVVLVATable() {
-	for a := 0; a < 6; a++ {
-		for v := 0; v < 6; v++ {
-			mvvLva[a][v] = pieceValues[v]*MVVLVAWeight - pieceValues[a]
+	// Initialize all to zero
+	for i := range mvvLvaFlat {
+		mvvLvaFlat[i] = 0
+	}
+	// Only non-king pieces (0 to 4: Pawn, Knight, Bishop, Rook, Queen)
+	for a := 0; a < 5; a++ {
+		for v := 0; v < 5; v++ {
+			mvvLvaFlat[a*6+v] = pieceValues[v]*MVVLVAWeight - pieceValues[a]
 		}
 	}
+}
+
+func mvvLvaScore(att, vic int) int {
+	if att == King || vic == King {
+		return 0
+	}
+	return int(mvvLvaFlat[att*6+vic])
 }
 
 // ============================================================================
@@ -1012,6 +1088,11 @@ func abs(x int) int {
 		return -x
 	}
 	return x
+}
+
+// Helper for dynamic null move reduction
+func nullMoveReduction(depth int) int {
+	return 3 + min(2, depth/6)
 }
 
 // ============================================================================
@@ -1065,7 +1146,6 @@ func (p *Position) setStartPos() {
 	p.castle = 0xF // WK|WQ|BK|BQ
 	p.epSquare = -1
 	p.fullmove = 1
-	// phase starts at 0; it increases on captures in makeMove
 
 	// local helper to place a piece and update all state + hash
 	setPiece := func(sq, c, pc int) {
@@ -1786,7 +1866,6 @@ func (p *Position) makeMove(m Move) Undo {
 		p.material[them] -= pieceValues[capturedPiece]
 		p.psqScore[them] -= pst[them][capturedPiece][capSq]
 		p.psqScoreEG[them] -= pstEnd[them][capturedPiece][capSq]
-		p.phase += piecePhase[capturedPiece]
 		p.square[capSq] = -1
 
 		p.halfmove = 0
@@ -1845,7 +1924,6 @@ func (p *Position) makeMove(m Move) Undo {
 		p.material[us] -= pieceValues[Pawn]
 		p.psqScore[us] -= pst[us][Pawn][from]
 		p.psqScoreEG[us] -= pstEnd[us][Pawn][from]
-		p.phase += piecePhase[Pawn]
 		p.square[from] = -1
 
 		promoType := (flags & 3) + Knight
@@ -1857,7 +1935,6 @@ func (p *Position) makeMove(m Move) Undo {
 		p.material[us] += pieceValues[promoType]
 		p.psqScore[us] += pst[us][promoType][to]
 		p.psqScoreEG[us] += pstEnd[us][promoType][to]
-		p.phase -= piecePhase[promoType]
 		p.square[to] = (us << 3) | promoType
 
 	} else {
@@ -2009,7 +2086,6 @@ func (p *Position) unmakeMove(m Move, undo Undo) {
 		p.material[us] -= pieceValues[promoType]
 		p.psqScore[us] -= pst[us][promoType][to]
 		p.psqScoreEG[us] -= pstEnd[us][promoType][to]
-		p.phase += piecePhase[promoType]
 		p.square[to] = -1
 
 		// restore pawn on 'from' inline setPiece(from, us, Pawn)
@@ -2020,7 +2096,6 @@ func (p *Position) unmakeMove(m Move, undo Undo) {
 		p.material[us] += pieceValues[Pawn]
 		p.psqScore[us] += pst[us][Pawn][from]
 		p.psqScoreEG[us] += pstEnd[us][Pawn][from]
-		p.phase -= piecePhase[Pawn]
 		p.square[from] = (us << 3) | Pawn
 
 	} else {
@@ -2057,7 +2132,6 @@ func (p *Position) unmakeMove(m Move, undo Undo) {
 		p.material[them] += pieceValues[undo.captured]
 		p.psqScore[them] += pst[them][undo.captured][capSq]
 		p.psqScoreEG[them] += pstEnd[them][undo.captured][capSq]
-		p.phase -= piecePhase[undo.captured]
 		p.square[capSq] = (them << 3) | undo.captured
 	}
 
@@ -2065,50 +2139,136 @@ func (p *Position) unmakeMove(m Move, undo Undo) {
 	p.hash = undo.hash
 }
 
+func (p *Position) makeNullMove() Undo {
+	undo := Undo{
+		hash:             p.hash,
+		castle:           p.castle,
+		epSquare:         p.epSquare,
+		halfmove:         p.halfmove,
+		lastIrreversible: p.lastIrreversible,
+		historyPly:       p.historyPly,
+	}
+
+	// Flip side and update hash
+	p.side ^= 1
+	p.hash ^= zobristSide
+
+	// Clear EP square if exists
+	if epFile := p.epSquare; epFile != -1 {
+		p.hash ^= zobristEP[epFile%8]
+		p.epSquare = -1
+	}
+
+	// Increment halfmove clock
+	p.halfmove++
+
+	// Update history
+	p.historyPly++
+	p.historyKeys[p.historyPly] = p.hash
+
+	return undo
+}
+
+func (p *Position) unmakeNullMove(undo Undo) {
+	p.hash = undo.hash
+	p.castle = undo.castle
+	p.epSquare = undo.epSquare
+	p.halfmove = undo.halfmove
+	p.lastIrreversible = undo.lastIrreversible
+	p.historyPly = undo.historyPly
+	p.side ^= 1
+}
+
 // ============================================================================
 // EVALUATION
 // ============================================================================
-func (p *Position) calculateMobility(side int) (mgScore, egScore int) {
+// calculateMobilityAndAttacks computes mobility scores AND king attack units
+// Returns: mgScore, egScore, attackUnits
+func (p *Position) calculateMobilityAndAttacks(side int) (mgScore, egScore int, attackUnits int) {
 	us := side
+	them := us ^ 1
 	empty := ^p.all
 
-	// Knight mobility
+	// Get opponent's king zone for attack unit calculation
+	// In normal chess, kings are always present, so no need for fallback
+	theirKingBB := p.pieces[them][King]
+	theirKingSq := bits.TrailingZeros64(uint64(theirKingBB))
+	theirKingZone := kingZoneMask[them][theirKingSq]
+
+	// Knight mobility & attacks
 	for bb := p.pieces[us][Knight]; bb != 0; {
 		from := popLSB(&bb)
-		// Exclude captures in mobility calculation
-		moves := knightAttacks[from] & empty
-		count := bits.OnesCount64(uint64(moves))
+		attacks := knightAttacks[from]
+
+		// Mobility: count moves to empty squares
+		mobility := attacks & empty
+		count := bits.OnesCount64(uint64(mobility))
 		mgScore += knightMobilityMG[count]
 		egScore += mobilityEG[count]
+
+		// King safety: count attacks on opponent's king zone
+		kingZoneAttacks := attacks & theirKingZone
+		attackUnits += KnightAttackWeight * bits.OnesCount64(uint64(kingZoneAttacks))
 	}
-	// Bishop mobility
+
+	// Bishop mobility & attacks
 	for bb := p.pieces[us][Bishop]; bb != 0; {
 		from := popLSB(&bb)
-		// Exclude captures in mobility calculation
-		moves := bishopAttacks(from, p.all) & empty
-		count := bits.OnesCount64(uint64(moves))
+		attacks := bishopAttacks(from, p.all)
+
+		mobility := attacks & empty
+		count := bits.OnesCount64(uint64(mobility))
 		mgScore += bishopMobilityMG[count]
 		egScore += mobilityEG[count]
+
+		kingZoneAttacks := attacks & theirKingZone
+		attackUnits += BishopAttackWeight * bits.OnesCount64(uint64(kingZoneAttacks))
 	}
-	// Rook mobility
+
+	// Rook mobility & attacks
 	for bb := p.pieces[us][Rook]; bb != 0; {
 		from := popLSB(&bb)
-		// Exclude captures in mobility calculation
-		moves := rookAttacks(from, p.all) & empty
-		count := bits.OnesCount64(uint64(moves))
+		attacks := rookAttacks(from, p.all)
+
+		mobility := attacks & empty
+		count := bits.OnesCount64(uint64(mobility))
 		mgScore += rookMobilityMG[count]
 		egScore += mobilityEG[count]
+
+		kingZoneAttacks := attacks & theirKingZone
+		attackUnits += RookAttackWeight * bits.OnesCount64(uint64(kingZoneAttacks))
 	}
-	// Queen mobility
+
+	// Queen mobility & attacks
 	for bb := p.pieces[us][Queen]; bb != 0; {
 		from := popLSB(&bb)
-		// Exclude captures in mobility calculation
-		moves := (rookAttacks(from, p.all) | bishopAttacks(from, p.all)) & empty
-		count := bits.OnesCount64(uint64(moves))
+		attacks := rookAttacks(from, p.all) | bishopAttacks(from, p.all)
+
+		mobility := attacks & empty
+		count := bits.OnesCount64(uint64(mobility))
 		mgScore += queenMobilityMG[count]
 		egScore += mobilityEG[count]
+
+		kingZoneAttacks := attacks & theirKingZone
+		attackUnits += QueenAttackWeight * bits.OnesCount64(uint64(kingZoneAttacks))
 	}
-	return
+
+	return mgScore, egScore, attackUnits
+}
+
+// evaluateKingSafety calculates the king safety penalty based on attack units
+func (p *Position) evaluateKingSafety(side int, attackUnits int) int {
+	// Safety table lookup with bounds checking
+	if attackUnits >= SafetyTableSize {
+		attackUnits = SafetyTableSize - 1
+	}
+	if attackUnits < 0 {
+		attackUnits = 0
+	}
+
+	// Return negative value (penalty) for being attacked
+	// King safety is primarily a middlegame concern
+	return -safetyTable[attackUnits]
 }
 
 // northFill fills the files north of the set bits
@@ -2168,8 +2328,9 @@ func (p *Position) evaluate() int {
 	b := p.psqScore[White] - p.psqScore[Black]
 	c := p.psqScoreEG[White] - p.psqScoreEG[Black]
 
-	wMobMG, wMobEG := p.calculateMobility(White)
-	bMobMG, bMobEG := p.calculateMobility(Black)
+	// Get mobility and attack units in single pass
+	wMobMG, wMobEG, wAttackUnits := p.calculateMobilityAndAttacks(White)
+	bMobMG, bMobEG, bAttackUnits := p.calculateMobilityAndAttacks(Black)
 
 	mobilityMG := wMobMG - bMobMG
 	mobilityEG := wMobEG - bMobEG
@@ -2180,6 +2341,12 @@ func (p *Position) evaluate() int {
 	passedMG := wPassMG - bPassMG
 	passedEG := wPassEG - bPassEG
 
+	// Calculate king safety penalties
+	// White's king safety is based on Black's attack units, and vice versa
+	wKingSafety := p.evaluateKingSafety(White, bAttackUnits)
+	bKingSafety := p.evaluateKingSafety(Black, wAttackUnits)
+	kingSafety := wKingSafety - bKingSafety
+
 	mg := a + b
 	eg := a + c
 
@@ -2187,15 +2354,10 @@ func (p *Position) evaluate() int {
 	eg += mobilityEG
 	mg += passedMG
 	eg += passedEG
+	mg += kingSafety // King safety is primarily middlegame
 
-	ph := p.phase
-	if ph < 0 {
-		ph = 0
-	} else if ph > totalPhase {
-		ph = totalPhase
-	}
-	phaseScaled := phaseScaledTbl[ph]
-
+	ph := p.computePhase()
+	phaseScaled := phaseScale(ph)
 	score := eg + ((mg-eg)*phaseScaled)/PhaseScale
 
 	if p.side == Black {
@@ -2207,16 +2369,6 @@ func (p *Position) evaluate() int {
 // ============================================================================
 // MOVE ORDERING
 // ============================================================================
-// Score buckets for ordering
-const (
-	scoreHash            = 1000000
-	scorePromoBase       = 900000
-	scoreCaptureBase     = 800000
-	scoreKiller1         = 750000
-	scoreKiller2         = 740000
-	scoreFallbackCapture = 700000
-)
-
 func (p *Position) orderMoves(moves []Move, bestMove, killer1, killer2 Move) []Move {
 	n := len(moves)
 	if n <= 1 {
@@ -2256,7 +2408,7 @@ func (p *Position) orderMoves(moves []Move, bestMove, killer1, killer2 Move) []M
 				if attVal >= 0 && vVal >= 0 {
 					attacker := attVal & 7
 					victim := vVal & 7
-					score = scoreCaptureBase + mvvLva[attacker][victim]
+					score = scoreCaptureBase + mvvLvaScore(attacker, victim)
 				} else {
 					score = scoreFallbackCapture
 				}
@@ -2347,8 +2499,7 @@ func (p *Position) quiesce(alpha, beta, ply int, tc *TimeControl) int {
 		if stand > alpha {
 			alpha = stand
 		} // raise alpha after stand-pat
-		// delta pruning, disabled via phase scaling
-		if p.phase < (totalPhase*5)/6 { // disable only in late endgame
+		if !p.isEndgame() { // Apply delta pruning only in non-endgame positions
 			them := p.side ^ 1
 			maxGain := 0
 			if p.pieces[them][Queen] != 0 {
@@ -2458,13 +2609,14 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 		}
 
 		scoreFromTT := int(score)
-		isMateScore := scoreFromTT > Mate-MateScoreGuard || scoreFromTT < -Mate+MateScoreGuard
+		isMateScore := scoreFromTT > MateValue-MaxDepth || scoreFromTT < -MateValue+MaxDepth
 		if isMateScore {
 			if scoreFromTT > 0 {
 				scoreFromTT -= ply
 			} else {
 				scoreFromTT += ply
 			}
+			// Keep usability check for non-exact entries
 			if flag != ttFlagExact {
 				usable = false
 			}
@@ -2521,6 +2673,23 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 					return v
 				}
 			}
+		}
+	}
+
+	// Null Move Pruning (NMP)
+	// Conditions: depth >= 3, not in check, not endgame, non-PV node
+	// Reduction: R = 3 + min(2, depth/6)
+	// Search: Null window [-beta, -beta+1] at depth-R
+	// ---- Null Move Pruning ----
+	if depth >= 3 && !inCheck && !p.isEndgame() && pv == nil {
+		R := nullMoveReduction(depth)
+
+		undo := p.makeNullMove()
+		score := -p.negamax(depth-1-R, -beta, -beta+1, ply+1, nil, tc, ss)
+		p.unmakeNullMove(undo)
+
+		if score >= beta {
+			return beta // Prune
 		}
 	}
 
@@ -2633,9 +2802,9 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 			}
 			// Adjust mate scores before storing (root-relative to position-relative)
 			storeScore := score
-			if storeScore > Mate-MateScoreGuard {
+			if storeScore > MateValue-MaxDepth {
 				storeScore += ply
-			} else if storeScore < -Mate+MateScoreGuard {
+			} else if storeScore < -MateValue+MaxDepth {
 				storeScore -= ply
 			}
 			tt.Save(p.hash, m, storeScore, depth, ttFlagLower)
@@ -2721,7 +2890,7 @@ func (p *Position) search(tc *TimeControl) Move {
 	}
 
 	// iterative deepening
-	var prevScore int = 0   // track score across iterations
+	var prevScore int       // track score across iterations
 	var havePrev bool       // whether prevScore is valid
 	var stableBestMove Move // Best move from the last COMPLETED depth
 	var pvBuf [MaxDepth]Move
@@ -2804,6 +2973,12 @@ func (p *Position) search(tc *TimeControl) Move {
 			absScore = -absScore
 		}
 
+		// Mate confirmation and iterative deepening break
+		if absScore >= MateValue-MaxDepth && bestMove != 0 {
+			stableBestMove = bestMove
+			break // Exit iterative deepening
+		}
+
 		if absScore >= Mate-MateScoreGuard { // mate-encoded score
 			// convert plies -> moves for UCI
 			matePly := Mate - absScore     // plies to mate
@@ -2864,6 +3039,10 @@ func (tc *TimeControl) Stop() {
 }
 
 func (tc *TimeControl) allocateTime(side int) {
+	// Time allocation strategy:
+	//   base = min( (remaining_time - reserve)/moves_to_go + increment/2,
+	//               remaining_time/2 )
+	//   Then ensure minimum thinking time
 	if tc.movetime > 0 {
 		tc.deadline = time.Now().Add(time.Duration(tc.movetime) * time.Millisecond)
 		return
@@ -2896,23 +3075,12 @@ func (tc *TimeControl) allocateTime(side int) {
 		fromBank = capBank
 	}
 
-	baseMs := fromBank + myInc
-
-	// Never think longer than what’s actually left (minus reserve).
-	if baseMs > usableTime {
-		baseMs = usableTime
-	}
-
-	// Apply a minimum only if there is some bank left, and still respect the cap.
+	baseMs := min(fromBank+myInc/perMoveCapDiv, usableTime)
 	if baseMs < minTimeMs && usableTime > 0 {
-		if minTimeMs < usableTime {
-			baseMs = minTimeMs
-		} else {
-			baseMs = usableTime
-		}
+		baseMs = min(minTimeMs, usableTime)
 	}
 
-	tc.deadline = time.Now().Add(time.Duration(baseMs) * time.Millisecond)
+	tc.deadline = time.Now().Add(time.Millisecond * time.Duration(baseMs))
 }
 
 func (tc *TimeControl) shouldStop() bool {
@@ -2944,7 +3112,8 @@ func (tc *TimeControl) shouldContinue(lastIter time.Duration) bool {
 	}
 
 	// Allow next iteration only if we likely finish it.
-	return remain > lastIter*nextIterMult+continueMargin
+	minRequired := lastIter*nextIterMult + continueMargin
+	return remain > minRequired
 }
 
 // ============================================================================
@@ -3361,7 +3530,4 @@ func main() {
 }
 
 // To make an executable
-// go build -o Soomi.exe soomi.go
-
-// Smaller one in powershell
 // go build -trimpath -ldflags "-s -w" -o Soomi.exe soomi.go
