@@ -2461,32 +2461,6 @@ func (p *Position) quiesce(alpha, beta, ply int, tc *TimeControl) int {
 		return 0
 	}
 
-	// TT probe
-	if e, found, usable := tt.Probe(p.hash, 0); found && usable {
-		_, score, _, _, flag := e.unpack()
-		scoreFromTT := int(score)
-		isMate := scoreFromTT > Mate-MateScoreGuard || scoreFromTT < -Mate+MateScoreGuard
-		if isMate {
-			if scoreFromTT > 0 {
-				scoreFromTT -= ply
-			} else {
-				scoreFromTT += ply
-			}
-		}
-		// Use score only if exact or within bounds; ignore non-exact mate-like bounds
-		if !(isMate && flag != ttFlagExact) {
-			if flag == ttFlagExact {
-				return scoreFromTT
-			}
-			if flag == ttFlagLower && scoreFromTT >= beta {
-				return scoreFromTT
-			}
-			if flag == ttFlagUpper && scoreFromTT <= alpha {
-				return scoreFromTT
-			}
-		}
-	}
-
 	inCheck := p.inCheck()
 	best := alpha
 	if !inCheck {
@@ -2555,8 +2529,7 @@ func (p *Position) quiesce(alpha, beta, ply int, tc *TimeControl) int {
 
 	// Checkmate in quiesce
 	if inCheck && legalCount == 0 {
-		score := -Mate + ply                      // node-relative return value
-		tt.Save(p.hash, 0, -Mate, 0, ttFlagExact) // store position-relative
+		score := -Mate + ply
 		return score
 	}
 
@@ -2829,21 +2802,13 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 		}
 	}
 
-	// no legal moves -> mate or stalemate. Store exact result in TT.
+	// no legal moves -> mate or stalemate
 	if legalMoves == 0 {
 		if inCheck {
 			score := -Mate + ply // node-relative
-			// encode to position-relative before storing
-			store := score
-			if store > Mate-MateScoreGuard {
-				store += ply
-			} else if store < -Mate+MateScoreGuard {
-				store -= ply
-			}
-			tt.Save(p.hash, 0, store, 63, ttFlagExact) // depth=63 => always usable
 			return score
 		}
-		tt.Save(p.hash, 0, 0, 63, ttFlagExact)
+		// For stalemate/draw, don't store in TT - just return 0
 		return 0
 	}
 
