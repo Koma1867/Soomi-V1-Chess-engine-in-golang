@@ -88,20 +88,20 @@ const defaultTTSizeMB = 256
 const MaxGamePly = 1024
 
 const (
-	KnightMobZeroPoint = 3
-	KnightMobCpPerMove = 4
-	BishopMobZeroPoint = 5
-	BishopMobCpPerMove = 3
-	RookMobZeroPoint   = 5
-	RookMobCpPerMove   = 3
-	QueenMobZeroPoint  = 8
-	QueenMobCpPerMove  = 2
+	KnightMobZeroPoint = 4
+	KnightMobCpPerMove = 3
+	BishopMobZeroPoint = 7
+	BishopMobCpPerMove = 2
+	RookMobZeroPoint   = 7
+	RookMobCpPerMove   = 2
+	QueenMobZeroPoint  = 14
+	QueenMobCpPerMove  = 1
 	EgMobCpPerMove     = 2
 	SafetyTableSize    = 100
 	KnightAttackWeight = 2
 	BishopAttackWeight = 2
-	RookAttackWeight   = 4
-	QueenAttackWeight  = 6
+	RookAttackWeight   = 3
+	QueenAttackWeight  = 5
 	PhaseScale         = 256
 	MVVLVAWeight       = 100
 )
@@ -110,14 +110,14 @@ var piecePhase = [6]int{0, 1, 1, 2, 4, 0}
 var totalPhase = piecePhase[Pawn]*16 + piecePhase[Knight]*4 + piecePhase[Bishop]*4 + piecePhase[Rook]*4 + piecePhase[Queen]*2
 
 var (
-	pieceValues = [6]int{100, 310, 320, 500, 900, 20000}
+	pieceValues = [6]int{100, 320, 330, 500, 950, 20000}
 	pst         [2][6][64]int
 	pstEnd      [2][6][64]int
 )
 
 var (
-	PassedPawnMG = [8]int{0, 5, 12, 20, 32, 50, 75, 0}
-	PassedPawnEG = [8]int{0, 10, 20, 35, 55, 85, 130, 0}
+	PassedPawnMG = [8]int{0, 5, 12, 22, 36, 56, 84, 0}
+	PassedPawnEG = [8]int{0, 8, 20, 36, 62, 98, 154, 0}
 )
 
 const ZobristSeed = 1070372
@@ -276,9 +276,9 @@ func phaseScale(ph int) int {
 
 func initSafetyTable() {
 	for i := 0; i < SafetyTableSize; i++ {
-		safetyTable[i] = (i * i) / 5
-		if safetyTable[i] > 130 {
-			safetyTable[i] = 130
+		safetyTable[i] = (i * i) / 4
+		if safetyTable[i] > 150 {
+			safetyTable[i] = 150
 		}
 	}
 }
