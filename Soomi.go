@@ -12,31 +12,11 @@ import (
 	"time"
 )
 
-/*
-Package Soomi implements a UCI-compliant chess engine in Go.
-
-Key features:
-- Magic bitboard move generation
-- Alpha-beta search with principal variation
-- Transposition table with replacement strategies
-- Late move reductions and null move pruning
-- Comprehensive evaluation with mobility and king safety
-- UCI protocol support with time management
-
-The engine uses a bitboard representation for efficient move generation
-and evaluation, with sophisticated search algorithms for strong play.
-*/
-
-// ============================================================================
-// CONSTANTS
-// ============================================================================
-// -- Sides
 const (
 	White = 0
 	Black = 1
 )
 
-// -- Different piece types
 const (
 	Pawn   = 0
 	Knight = 1
@@ -46,7 +26,6 @@ const (
 	King   = 5
 )
 
-// -- Search constants
 const (
 	MaxDepth             = 32
 	Infinity             = 30000
@@ -67,7 +46,6 @@ const (
 	MateLikeThreshold    = Mate - MateScoreGuard
 )
 
-// -- Time management constants
 const (
 	minTimeMs      int64         = 10
 	perMoveCapDiv  int64         = 2
@@ -75,7 +53,6 @@ const (
 	continueMargin time.Duration = 10 * time.Millisecond
 )
 
-// -- Move flags
 const (
 	FlagQuiet   = 0
 	FlagCapture = 4
@@ -91,7 +68,6 @@ const (
 	FlagPromoCQ = 15
 )
 
-// Score buckets for ordering
 const (
 	scoreHash            = 1000000
 	scorePromoBase       = 900000
@@ -101,58 +77,49 @@ const (
 	scoreFallbackCapture = 700000
 )
 
-// -- Transposition table flags
 const (
 	ttFlagExact uint8 = 0
 	ttFlagLower uint8 = 1
 	ttFlagUpper uint8 = 2
 )
 
-// -- TT size
-// Can be overridden via UCI "Hash" option.
 const defaultTTSizeMB = 256
 
-// -- History size for repetition detection
 const MaxGamePly = 1024
 
-// -- Evaluation constants
 const (
-	KnightMobZeroPoint = 4
-	KnightMobCpPerMove = 3
-	BishopMobZeroPoint = 7
-	BishopMobCpPerMove = 2
-	RookMobZeroPoint   = 7
-	RookMobCpPerMove   = 2
-	QueenMobZeroPoint  = 14
-	QueenMobCpPerMove  = 1
+	KnightMobZeroPoint = 3
+	KnightMobCpPerMove = 4
+	BishopMobZeroPoint = 5
+	BishopMobCpPerMove = 3
+	RookMobZeroPoint   = 5
+	RookMobCpPerMove   = 3
+	QueenMobZeroPoint  = 8
+	QueenMobCpPerMove  = 2
 	EgMobCpPerMove     = 2
 	SafetyTableSize    = 100
 	KnightAttackWeight = 2
 	BishopAttackWeight = 2
-	RookAttackWeight   = 3
-	QueenAttackWeight  = 5
+	RookAttackWeight   = 4
+	QueenAttackWeight  = 6
 	PhaseScale         = 256
 	MVVLVAWeight       = 100
 )
 
-// Fruit-style phase weights for interpolation
 var piecePhase = [6]int{0, 1, 1, 2, 4, 0}
 var totalPhase = piecePhase[Pawn]*16 + piecePhase[Knight]*4 + piecePhase[Bishop]*4 + piecePhase[Rook]*4 + piecePhase[Queen]*2
 
-// piece values and piece-square tables
 var (
-	pieceValues = [6]int{100, 320, 330, 500, 950, 20000}
+	pieceValues = [6]int{100, 310, 320, 500, 900, 20000}
 	pst         [2][6][64]int
 	pstEnd      [2][6][64]int
 )
 
-// -- Passed pawns
 var (
-	PassedPawnMG = [8]int{0, 5, 12, 22, 36, 56, 84, 0}
-	PassedPawnEG = [8]int{0, 8, 20, 36, 62, 98, 154, 0}
+	PassedPawnMG = [8]int{0, 5, 12, 20, 32, 50, 75, 0}
+	PassedPawnEG = [8]int{0, 10, 20, 35, 55, 85, 130, 0}
 )
 
-// -- Zobrist seed
 const ZobristSeed = 1070372
 
 var (
@@ -161,20 +128,19 @@ var (
 )
 
 type MagicEntry struct {
-	mask   Bitboard // Relevant occupancy bits (exclude edges)
-	magic  Bitboard // Magic number for hashing
-	shift  uint8    // Right shift amount
-	offset uint32   // Offset into attack table
+	mask   Bitboard
+	magic  Bitboard
+	shift  uint8
+	offset uint32
 }
 
 var (
 	rookMagics        [64]MagicEntry
 	bishopMagics      [64]MagicEntry
-	rookAttackTable   [102400]Bitboard // Fixed size array for compile-time bounds
-	bishopAttackTable [5248]Bitboard   // Fixed size array for compile-time bounds
+	rookAttackTable   [102400]Bitboard
+	bishopAttackTable [5248]Bitboard
 )
 
-// Pre-computed magic numbers for rooks
 var rookMagicNumbers = [64]uint64{
 	0x0080001020400080, 0x0040001000200040, 0x0080081000200080, 0x0080040800100080,
 	0x0080020400080080, 0x0080010200040080, 0x0080008001000200, 0x0080002040800100,
@@ -194,7 +160,6 @@ var rookMagicNumbers = [64]uint64{
 	0x0001000204080011, 0x0001000204000801, 0x0001000082000401, 0x0001FFFAABFAD1A2,
 }
 
-// Pre-computed magic numbers for bishops
 var bishopMagicNumbers = [64]uint64{
 	0x0002020202020200, 0x0002020202020000, 0x0004010202000000, 0x0004040080000000,
 	0x0001104000000000, 0x0000821040000000, 0x0000410410400000, 0x0000104104104000,
@@ -214,9 +179,6 @@ var bishopMagicNumbers = [64]uint64{
 	0x0000000010020200, 0x0000000404080200, 0x0000040404040400, 0x0002020202020200,
 }
 
-// ============================================================================
-// TYPES
-// ============================================================================
 type Bitboard uint64
 type Move uint32
 
@@ -250,7 +212,6 @@ type Undo struct {
 	historyPly       int
 }
 
-// -- Time management structure
 type TimeControl struct {
 	wtime     int64
 	btime     int64
@@ -264,21 +225,16 @@ type TimeControl struct {
 	stopped   int32
 }
 
-// -- Killer moves for move-ordering and Improving for LMR
 type SearchStack struct {
 	killer1 Move
 	killer2 Move
 }
 
-// ============================================================================
-// EVALUATION / PST / PHASE DATA / LMR
-// ============================================================================
 var (
 	safetyTable  [SafetyTableSize]int
-	kingZoneMask [2][64]Bitboard // [color][kingSq] -> zone
+	kingZoneMask [2][64]Bitboard
 )
 
-// Mobility
 var (
 	knightMobilityMG [9]int
 	bishopMobilityMG [14]int
@@ -287,11 +243,10 @@ var (
 	mobilityEG       [28]int
 )
 
-// Passed Pawn bonuses and masks
 var (
-	passedPawnBonusMG [8]int      // Bonus by rank for a passed pawn in the middlegame
-	passedPawnBonusEG [8]int      // Bonus by rank for a passed pawn in the endgame
-	fileMask          [8]Bitboard // Masks for each file
+	passedPawnBonusMG [8]int
+	passedPawnBonusEG [8]int
+	fileMask          [8]Bitboard
 )
 
 func (p *Position) computePhase() int {
@@ -310,39 +265,32 @@ func (p *Position) computePhase() int {
 	return ph
 }
 
-// Add this function after computePhase in your Position methods
 func (p *Position) isEndgame() bool {
 	phase := p.computePhase()
-	return phase < totalPhase/4 // Endgame when phase < 25% of total
+	return phase < totalPhase/4
 }
 
 func phaseScale(ph int) int {
 	return ((totalPhase-ph)*PhaseScale + totalPhase/2) / totalPhase
 }
 
-// Initialize safety table (call this in init())
 func initSafetyTable() {
 	for i := 0; i < SafetyTableSize; i++ {
-		// Quadratic scaling: attacks become exponentially more dangerous
-		safetyTable[i] = (i * i) / 4
-		// Cap very high attacks to avoid extreme scores
-		if safetyTable[i] > 150 {
-			safetyTable[i] = 150
+		safetyTable[i] = (i * i) / 5
+		if safetyTable[i] > 130 {
+			safetyTable[i] = 130
 		}
 	}
 }
 
-// Initialize king zone masks (call this in init())
 func initKingZoneMasks() {
 	for sq := 0; sq < 64; sq++ {
-		// Base zone: king's 3x3 neighborhood (same for both colors)
-		baseZone := kingAttacks[sq] | sqBB[sq] // Include king's square
+		baseZone := kingAttacks[sq] | sqBB[sq]
 
 		r := sq / 8
 
-		// Calculate WHITE king zone (add squares north)
 		whiteZone := baseZone
-		if r < 6 { // Can add up to 3 squares ahead
+		if r < 6 {
 			whiteZone |= sqBB[sq+8]
 			if r < 5 {
 				whiteZone |= sqBB[sq+16]
@@ -353,9 +301,8 @@ func initKingZoneMasks() {
 		}
 		kingZoneMask[White][sq] = whiteZone
 
-		// Calculate BLACK king zone (add squares south) - START FRESH from baseZone
 		blackZone := baseZone
-		if r > 1 { // Can add up to 3 squares ahead
+		if r > 1 {
 			blackZone |= sqBB[sq-8]
 			if r > 2 {
 				blackZone |= sqBB[sq-16]
@@ -368,15 +315,10 @@ func initKingZoneMasks() {
 	}
 }
 
-// ============================================================================
-// MAGIC BITBOARDS
-// ============================================================================
-// Generate relevant occupancy mask for rook (exclude edges)
 func rookMask(sq int) Bitboard {
 	result := Bitboard(0)
 	r, f := sq/8, sq%8
 
-	// Vertical: exclude rank 0 and 7
 	for rr := r + 1; rr <= 6; rr++ {
 		result |= Bitboard(1) << (rr*8 + f)
 	}
@@ -384,7 +326,6 @@ func rookMask(sq int) Bitboard {
 		result |= Bitboard(1) << (rr*8 + f)
 	}
 
-	// Horizontal: exclude file 0 and 7
 	for ff := f + 1; ff <= 6; ff++ {
 		result |= Bitboard(1) << (r*8 + ff)
 	}
@@ -395,24 +336,22 @@ func rookMask(sq int) Bitboard {
 	return result
 }
 
-// Generate relevant occupancy mask for bishop (exclude edges)
 func bishopMask(sq int) Bitboard {
 	result := Bitboard(0)
 	r, f := sq/8, sq%8
 
-	// NE diagonal
 	for rr, ff := r+1, f+1; rr <= 6 && ff <= 6; rr, ff = rr+1, ff+1 {
 		result |= Bitboard(1) << (rr*8 + ff)
 	}
-	// SE diagonal
+
 	for rr, ff := r-1, f+1; rr >= 1 && ff <= 6; rr, ff = rr-1, ff+1 {
 		result |= Bitboard(1) << (rr*8 + ff)
 	}
-	// SW diagonal
+
 	for rr, ff := r-1, f-1; rr >= 1 && ff >= 1; rr, ff = rr-1, ff-1 {
 		result |= Bitboard(1) << (rr*8 + ff)
 	}
-	// NW diagonal
+
 	for rr, ff := r+1, f-1; rr <= 6 && ff >= 1; rr, ff = rr+1, ff-1 {
 		result |= Bitboard(1) << (rr*8 + ff)
 	}
@@ -420,9 +359,7 @@ func bishopMask(sq int) Bitboard {
 	return result
 }
 
-// Generate all possible occupancy variations from a mask
 func occupancyVariations(mask Bitboard) []Bitboard {
-	// Extract bit positions
 	bits := []int{}
 	for sq := 0; sq < 64; sq++ {
 		if mask&(Bitboard(1)<<sq) != 0 {
@@ -431,10 +368,9 @@ func occupancyVariations(mask Bitboard) []Bitboard {
 	}
 
 	n := len(bits)
-	count := 1 << n // 2^n variations
+	count := 1 << n
 	variations := make([]Bitboard, count)
 
-	// Generate all 2^n combinations
 	for i := 0; i < count; i++ {
 		occ := Bitboard(0)
 		for j := 0; j < n; j++ {
@@ -448,19 +384,15 @@ func occupancyVariations(mask Bitboard) []Bitboard {
 	return variations
 }
 
-// Calculate magic index from occupancy
 func magicIndex(occ Bitboard, magic Bitboard, shift uint8) uint32 {
 	return uint32((occ * magic) >> shift)
 }
 
-// Initialize magic bitboard tables
 func initMagicBitboards() {
-	// Phase 1: Calculate offsets and populate magic entries
 	rookTableSize := 0
 	bishopTableSize := 0
 
 	for sq := 0; sq < 64; sq++ {
-		// Rook
 		mask := rookMask(sq)
 		bitCount := bits.OnesCount64(uint64(mask))
 		rookMagics[sq].mask = mask
@@ -469,7 +401,6 @@ func initMagicBitboards() {
 		rookMagics[sq].offset = uint32(rookTableSize)
 		rookTableSize += 1 << bitCount
 
-		// Bishop
 		mask = bishopMask(sq)
 		bitCount = bits.OnesCount64(uint64(mask))
 		bishopMagics[sq].mask = mask
@@ -479,29 +410,22 @@ func initMagicBitboards() {
 		bishopTableSize += 1 << bitCount
 	}
 
-	// Phase 2: Tables are now fixed-size arrays (no allocation needed)
-	// rookAttackTable and bishopAttackTable are already allocated as global arrays
-
-	// Phase 3: Fill rook attack table
 	for sq := 0; sq < 64; sq++ {
 		mask := rookMagics[sq].mask
 		variations := occupancyVariations(mask)
 
 		for _, occ := range variations {
-			// Calculate attacks using classical method
 			attacks := rookAttacksClassical(sq, occ)
 			idx := magicIndex(occ, rookMagics[sq].magic, rookMagics[sq].shift)
 			rookAttackTable[rookMagics[sq].offset+idx] = attacks
 		}
 	}
 
-	// Phase 4: Fill bishop attack table
 	for sq := 0; sq < 64; sq++ {
 		mask := bishopMagics[sq].mask
 		variations := occupancyVariations(mask)
 
 		for _, occ := range variations {
-			// Calculate attacks using classical method
 			attacks := bishopAttacksClassical(sq, occ)
 			idx := magicIndex(occ, bishopMagics[sq].magic, bishopMagics[sq].shift)
 			bishopAttackTable[bishopMagics[sq].offset+idx] = attacks
@@ -509,12 +433,10 @@ func initMagicBitboards() {
 	}
 }
 
-// Classical rook attack generation (for table initialization only)
 func rookAttacksClassical(sq int, occ Bitboard) Bitboard {
 	attacks := Bitboard(0)
 	r, f := sq/8, sq%8
 
-	// North (rank increasing)
 	for rr := r + 1; rr < 8; rr++ {
 		attacks |= Bitboard(1) << (rr*8 + f)
 		if occ&(Bitboard(1)<<(rr*8+f)) != 0 {
@@ -522,7 +444,6 @@ func rookAttacksClassical(sq int, occ Bitboard) Bitboard {
 		}
 	}
 
-	// South (rank decreasing)
 	for rr := r - 1; rr >= 0; rr-- {
 		attacks |= Bitboard(1) << (rr*8 + f)
 		if occ&(Bitboard(1)<<(rr*8+f)) != 0 {
@@ -530,7 +451,6 @@ func rookAttacksClassical(sq int, occ Bitboard) Bitboard {
 		}
 	}
 
-	// East (file increasing)
 	for ff := f + 1; ff < 8; ff++ {
 		attacks |= Bitboard(1) << (r*8 + ff)
 		if occ&(Bitboard(1)<<(r*8+ff)) != 0 {
@@ -538,7 +458,6 @@ func rookAttacksClassical(sq int, occ Bitboard) Bitboard {
 		}
 	}
 
-	// West (file decreasing)
 	for ff := f - 1; ff >= 0; ff-- {
 		attacks |= Bitboard(1) << (r*8 + ff)
 		if occ&(Bitboard(1)<<(r*8+ff)) != 0 {
@@ -549,12 +468,10 @@ func rookAttacksClassical(sq int, occ Bitboard) Bitboard {
 	return attacks
 }
 
-// Classical bishop attack generation (for table initialization only)
 func bishopAttacksClassical(sq int, occ Bitboard) Bitboard {
 	attacks := Bitboard(0)
 	r, f := sq/8, sq%8
 
-	// NE diagonal
 	for rr, ff := r+1, f+1; rr < 8 && ff < 8; rr, ff = rr+1, ff+1 {
 		attacks |= Bitboard(1) << (rr*8 + ff)
 		if occ&(Bitboard(1)<<(rr*8+ff)) != 0 {
@@ -562,7 +479,6 @@ func bishopAttacksClassical(sq int, occ Bitboard) Bitboard {
 		}
 	}
 
-	// SE diagonal
 	for rr, ff := r-1, f+1; rr >= 0 && ff < 8; rr, ff = rr-1, ff+1 {
 		attacks |= Bitboard(1) << (rr*8 + ff)
 		if occ&(Bitboard(1)<<(rr*8+ff)) != 0 {
@@ -570,7 +486,6 @@ func bishopAttacksClassical(sq int, occ Bitboard) Bitboard {
 		}
 	}
 
-	// SW diagonal
 	for rr, ff := r-1, f-1; rr >= 0 && ff >= 0; rr, ff = rr-1, ff-1 {
 		attacks |= Bitboard(1) << (rr*8 + ff)
 		if occ&(Bitboard(1)<<(rr*8+ff)) != 0 {
@@ -578,7 +493,6 @@ func bishopAttacksClassical(sq int, occ Bitboard) Bitboard {
 		}
 	}
 
-	// NW diagonal
 	for rr, ff := r+1, f-1; rr < 8 && ff >= 0; rr, ff = rr+1, ff-1 {
 		attacks |= Bitboard(1) << (rr*8 + ff)
 		if occ&(Bitboard(1)<<(rr*8+ff)) != 0 {
@@ -597,13 +511,8 @@ func initSqBB() {
 	}
 }
 
-// precomputed LMR reductions
 var lmrTable [][]int
 
-// initLMR initializes the Late Move Reduction table.
-// LMR Table: [depth][move_number] -> reduction
-// Indexing: depth 0-MaxDepth, moves 0-maxLMRMoves
-// Only moves 3+ get reductions (1-2 are never reduced)
 func initLMR() {
 	maxD := MaxDepth
 	rows := maxD + 1
@@ -644,7 +553,6 @@ func initMobility() {
 }
 
 func initPassedPawns() {
-	// Initialize file masks
 	for i := 0; i < 8; i++ {
 		fileMask[i] = 0x0101010101010101 << i
 	}
@@ -653,13 +561,10 @@ func initPassedPawns() {
 	passedPawnBonusEG = PassedPawnEG
 }
 
-// ============================================================================
-// ZOBRIST, ATTACKS, MVV-LVA
-// ============================================================================
 var (
 	zobristPiece    [2][6][64]uint64
 	zobristSide     uint64
-	zobristCastleWK uint64 // bits: WK, WQ, BK, BQ
+	zobristCastleWK uint64
 	zobristCastleWQ uint64
 	zobristCastleBK uint64
 	zobristCastleBQ uint64
@@ -670,9 +575,6 @@ var (
 	mvvLvaFlat      [36]int
 )
 
-// ============================================================================
-// REPETITION
-// ============================================================================
 func (p *Position) isRepetition() bool {
 	if p.historyPly-p.lastIrreversible < 2 {
 		return false
@@ -694,12 +596,9 @@ func (p *Position) isDraw() bool {
 	return p.halfmove >= 100 || p.isRepetition()
 }
 
-// ============================================================================
-// TRANSPOSITION TABLE TYPES & HELPERS
-// ============================================================================
 type ttEntry struct {
 	key    uint64
-	packed uint64 // [move:32][score:16][gen:8][depth:6][flag:2]
+	packed uint64
 }
 
 func packEntry(move uint32, score int16, gen uint8, depth uint8, flag uint8) uint64 {
@@ -722,27 +621,21 @@ type TranspositionTable struct {
 	gen     uint32
 }
 
-// ============================================================================
-// TRANSPOSITION TABLE
-// ============================================================================
 func InitTT(sizeMB int) {
 	if sizeMB <= 0 {
 		sizeMB = defaultTTSizeMB
 	}
 
-	entrySize := uint64(16) // ttEntry is exactly 16 bytes
+	entrySize := uint64(16)
 	totalBytes := uint64(sizeMB) * 1024 * 1024
 	entries := totalBytes / entrySize
 	if entries < 1 {
 		entries = 1
 	}
-
-	// round down to power of two
 	size := uint64(1)
 	for size<<1 <= entries {
 		size <<= 1
 	}
-	// clamp to max int to avoid overflow
 	maxLen := uint64(^uint(0) >> 1)
 	if size > maxLen {
 		size = maxLen
@@ -756,8 +649,6 @@ func InitTT(sizeMB int) {
 }
 
 func (t *TranspositionTable) Clear() {
-	// Increment generation counter to invalidate all entries without clearing memory.
-	// Only performs a full memory clear when generation counter wraps around (every 255 clears).
 	t.gen++
 	if t.gen > 255 {
 		t.gen = 1
@@ -775,7 +666,7 @@ func (t *TranspositionTable) Probe(key uint64, minDepth int) (ttEntry, bool, boo
 	}
 	_, _, gen, depth, _ := e.unpack()
 	if gen != uint8(t.gen) {
-		return e, true, false // allow move for ordering; not usable for pruning
+		return e, true, false
 	}
 	return e, true, int(depth) >= minDepth
 }
@@ -800,14 +691,12 @@ func (t *TranspositionTable) Save(key uint64, mv Move, score int, depth int, fla
 	}
 
 	if old.key == key {
-		// Same position: overwrite if new entry is better
 		oldDepth := uint8((old.packed >> 2) & 0x3F)
 		oldFlag := uint8(old.packed & 0x3)
 		if depth > int(oldDepth) || (depth == int(oldDepth) && flag == ttFlagExact && oldFlag != ttFlagExact) {
 			t.entries[idx] = ttEntry{key: key, packed: newPacked}
 		}
 	} else {
-		// Different position (collision) use depth-preferred replacement.
 		oldDepth := uint8((old.packed >> 2) & 0x3F)
 		if depth >= int(oldDepth) {
 			t.entries[idx] = ttEntry{key: key, packed: newPacked}
@@ -815,9 +704,6 @@ func (t *TranspositionTable) Save(key uint64, mv Move, score int, depth int, fla
 	}
 }
 
-// ============================================================================
-// INITIALIZATION
-// ============================================================================
 func init() {
 	initPST()
 	initZobrist()
@@ -900,10 +786,6 @@ func initPST() {
 		-30, -40, -40, -50, -50, -40, -40, -30,
 	}
 
-	// ========================================
-	// ENDGAME PSTs
-	// ========================================
-
 	copy(pstEnd[:], pst[:])
 	pstEnd[White][Pawn] = [64]int{
 		0, 0, 0, 0, 0, 0, 0, 0,
@@ -971,10 +853,9 @@ func initPST() {
 		-50, -40, -30, -20, -20, -30, -40, -50,
 	}
 
-	// Flip piece square tables for black side exactly
 	for pt := 0; pt < 6; pt++ {
 		for sq := 0; sq < 64; sq++ {
-			bsq := sq ^ 56 // Flip: a1<->a8, b1<->b8, etc.
+			bsq := sq ^ 56
 			pst[Black][pt][sq] = pst[White][pt][bsq]
 			pstEnd[Black][pt][sq] = pstEnd[White][pt][bsq]
 		}
@@ -1007,9 +888,6 @@ func initZobrist() {
 	}
 }
 
-// initAttacks precomputes attack bitboards for knights, kings, and pawns.
-// Pawn attacks are computed using rank/file arithmetic rather than direction offsets
-// to handle board edge cases implicitly.
 func initAttacks() {
 	knightDirs := []int{-17, -15, -10, -6, 6, 10, 15, 17}
 	kingDirs := []int{-9, -8, -7, -1, 1, 7, 8, 9}
@@ -1053,11 +931,9 @@ func initAttacks() {
 }
 
 func initMVVLVATable() {
-	// Initialize all to zero
 	for i := range mvvLvaFlat {
 		mvvLvaFlat[i] = 0
 	}
-	// Only non-king pieces (0 to 4: Pawn, Knight, Bishop, Rook, Queen)
 	for a := 0; a < 5; a++ {
 		for v := 0; v < 5; v++ {
 			mvvLvaFlat[a*6+v] = pieceValues[v]*MVVLVAWeight - pieceValues[a]
@@ -1072,17 +948,12 @@ func mvvLvaScore(att, vic int) int {
 	return int(mvvLvaFlat[att*6+vic])
 }
 
-// ============================================================================
-// BITBOARD UTILITIES
-// ============================================================================
-// popLSB clears and returns index of least significant 1 bit
 func popLSB(b *Bitboard) int {
 	idx := bits.TrailingZeros64(uint64(*b))
 	*b &= *b - 1
 	return idx
 }
 
-// abs for integers
 func abs(x int) int {
 	if x < 0 {
 		return -x
@@ -1090,14 +961,10 @@ func abs(x int) int {
 	return x
 }
 
-// Helper for dynamic null move reduction
 func nullMoveReduction(depth int) int {
 	return 3 + min(2, depth/6)
 }
 
-// ============================================================================
-// MOVE REPRESENTATION
-// ============================================================================
 func makeMove(from, to, flags int) Move {
 	return Move(from | (to << 6) | (flags << 12))
 }
@@ -1126,9 +993,6 @@ func (m Move) String() string {
 	return string(buf[:4])
 }
 
-// ============================================================================
-// POSITION MANAGEMENT
-// ============================================================================
 func NewPosition() *Position {
 	p := &Position{}
 	p.setStartPos()
@@ -1136,18 +1000,16 @@ func NewPosition() *Position {
 }
 
 func (p *Position) setStartPos() {
-	// full reset
-	*p = Position{} // zero all fields
+	*p = Position{}
 	for i := range p.square {
 		p.square[i] = -1
 	}
 
 	p.side = White
-	p.castle = 0xF // WK|WQ|BK|BQ
+	p.castle = 0xF
 	p.epSquare = -1
 	p.fullmove = 1
 
-	// local helper to place a piece and update all state + hash
 	setPiece := func(sq, c, pc int) {
 		bb := sqBB[sq]
 		p.square[sq] = (c << 3) | pc
@@ -1160,7 +1022,6 @@ func (p *Position) setStartPos() {
 		p.hash ^= zobristPiece[c][pc][sq]
 	}
 
-	// white
 	for f := 0; f < 8; f++ {
 		setPiece(8+f, White, Pawn)
 	}
@@ -1173,7 +1034,6 @@ func (p *Position) setStartPos() {
 	setPiece(3, White, Queen)
 	setPiece(4, White, King)
 
-	// black
 	for f := 0; f < 8; f++ {
 		setPiece(48+f, Black, Pawn)
 	}
@@ -1186,7 +1046,6 @@ func (p *Position) setStartPos() {
 	setPiece(59, Black, Queen)
 	setPiece(60, Black, King)
 
-	// castle keys: include bits that are set
 	if p.castle&1 != 0 {
 		p.hash ^= zobristCastleWK
 	}
@@ -1199,10 +1058,6 @@ func (p *Position) setStartPos() {
 	if p.castle&8 != 0 {
 		p.hash ^= zobristCastleBQ
 	}
-
-	// side-to-move: White → no side xor
-
-	// repetition baseline
 	p.historyPly = 0
 	p.lastIrreversible = 0
 	p.historyKeys[0] = p.hash
@@ -1217,10 +1072,6 @@ func (p *Position) pieceAt(sq int) (color, piece int, ok bool) {
 	piece = val & 7
 	return color, piece, true
 }
-
-// ============================================================================
-// ATTACK GENERATION
-// ============================================================================
 
 func rookAttacks(sq int, occ Bitboard) Bitboard {
 	m := &rookMagics[sq]
@@ -1260,9 +1111,6 @@ func (p *Position) inCheck() bool {
 	return p.isAttacked(kingSq, p.side^1)
 }
 
-// ============================================================================
-// MOVE GENERATION
-// ============================================================================
 func (p *Position) generateMovesTo(buf []Move, capturesOnly bool) int {
 	i := 0
 	us, them := p.side, p.side^1
@@ -1271,8 +1119,6 @@ func (p *Position) generateMovesTo(buf []Move, capturesOnly bool) int {
 	occUs := p.occupied[us]
 	occThem := p.occupied[them]
 	ep := p.epSquare
-
-	// Pawns
 	pawns := p.pieces[us][Pawn]
 	var push, dblPush int
 	var promoRank, dblRank int
@@ -1288,9 +1134,7 @@ func (p *Position) generateMovesTo(buf []Move, capturesOnly bool) int {
 		from := popLSB(&bb)
 		to := from + push
 
-		// Promotion rank
 		if from>>3 == promoRank {
-			// Quiet promotions (to empty square)
 			if !capturesOnly && to >= 0 && to < 64 && occAll&sqBB[to] == 0 {
 				buf[i] = makeMove(from, to, FlagPromoQ)
 				i++
@@ -1302,7 +1146,6 @@ func (p *Position) generateMovesTo(buf []Move, capturesOnly bool) int {
 				i++
 			}
 
-			// Promotion captures (only squares occupied by opponent)
 			attacks := pawnAttacks[us][from] & occThem
 			for att := attacks; att != 0; {
 				to := popLSB(&att)
@@ -1316,12 +1159,10 @@ func (p *Position) generateMovesTo(buf []Move, capturesOnly bool) int {
 				i++
 			}
 		} else {
-			// Single push (non-promotion)
 			if !capturesOnly && to >= 0 && to < 64 && occAll&sqBB[to] == 0 {
 				buf[i] = makeMove(from, to, FlagQuiet)
 				i++
 
-				// Double push
 				if from>>3 == dblRank {
 					to2 := from + dblPush
 					if to2 >= 0 && to2 < 64 && occAll&sqBB[to2] == 0 {
@@ -1331,7 +1172,6 @@ func (p *Position) generateMovesTo(buf []Move, capturesOnly bool) int {
 				}
 			}
 
-			// Pawn captures (non-promotion)
 			attacks := pawnAttacks[us][from] & occThem
 			for att := attacks; att != 0; {
 				to := popLSB(&att)
@@ -1339,7 +1179,6 @@ func (p *Position) generateMovesTo(buf []Move, capturesOnly bool) int {
 				i++
 			}
 
-			// En-passant
 			if ep >= 0 && ep < 64 {
 				if pawnAttacks[us][from]&sqBB[ep] != 0 {
 					buf[i] = makeMove(from, ep, FlagEP)
@@ -1349,7 +1188,6 @@ func (p *Position) generateMovesTo(buf []Move, capturesOnly bool) int {
 		}
 	}
 
-	// Knights
 	for bb := p.pieces[us][Knight]; bb != 0; {
 		from := popLSB(&bb)
 		attacks := knightAttacks[from] & ^occUs
@@ -1367,7 +1205,6 @@ func (p *Position) generateMovesTo(buf []Move, capturesOnly bool) int {
 		}
 	}
 
-	// Bishops
 	for bb := p.pieces[us][Bishop]; bb != 0; {
 		from := popLSB(&bb)
 		attacks := bishopAttacks(from, occAll) & ^occUs
@@ -1385,7 +1222,6 @@ func (p *Position) generateMovesTo(buf []Move, capturesOnly bool) int {
 		}
 	}
 
-	// Rooks
 	for bb := p.pieces[us][Rook]; bb != 0; {
 		from := popLSB(&bb)
 		attacks := rookAttacks(from, occAll) & ^occUs
@@ -1403,7 +1239,6 @@ func (p *Position) generateMovesTo(buf []Move, capturesOnly bool) int {
 		}
 	}
 
-	// Queens
 	for bb := p.pieces[us][Queen]; bb != 0; {
 		from := popLSB(&bb)
 		attacks := (bishopAttacks(from, occAll) | rookAttacks(from, occAll)) & ^occUs
@@ -1421,7 +1256,6 @@ func (p *Position) generateMovesTo(buf []Move, capturesOnly bool) int {
 		}
 	}
 
-	// King
 	if p.pieces[us][King] != 0 {
 		kingSq := bits.TrailingZeros64(uint64(p.pieces[us][King]))
 		attacks := kingAttacks[kingSq] & ^occUs
@@ -1439,7 +1273,6 @@ func (p *Position) generateMovesTo(buf []Move, capturesOnly bool) int {
 		}
 	}
 
-	// Castling
 	if !capturesOnly && !p.inCheck() {
 		if us == White {
 			if p.castle&1 != 0 && occAll&0x60 == 0 &&
@@ -1465,13 +1298,9 @@ func (p *Position) generateMovesTo(buf []Move, capturesOnly bool) int {
 			}
 		}
 	}
-
 	return i
 }
 
-// ============================================================================
-// ISLEGAL
-// ============================================================================
 func (p *Position) isLegal(m Move) bool {
 	if m == 0 {
 		return false
@@ -1494,12 +1323,10 @@ func (p *Position) isLegal(m Move) bool {
 	ourOcc := p.occupied[us]
 	theirOcc := p.occupied[them]
 
-	// cannot move onto own piece or "capture" a king
 	if ourOcc&toBB != 0 || (p.pieces[them][King]&toBB) != 0 {
 		return false
 	}
 
-	// semantics
 	if flags == FlagCastle {
 		if pt != King {
 			return false
@@ -1508,11 +1335,10 @@ func (p *Position) isLegal(m Move) bool {
 		if d != 2 && d != -2 {
 			return false
 		}
-		// king must castle from start square
 		if (us == White && from != 4) || (us == Black && from != 60) {
 			return false
 		}
-		if d > 0 { // O-O
+		if d > 0 {
 			if us == White {
 				if p.castle&1 == 0 || (occAll&(sqBB[from+1]|sqBB[from+2])) != 0 {
 					return false
@@ -1528,7 +1354,7 @@ func (p *Position) isLegal(m Move) bool {
 			if p.isAttacked(from, them) || p.isAttacked(from+1, them) || p.isAttacked(to, them) {
 				return false
 			}
-		} else { // O-O-O
+		} else {
 			if us == White {
 				if p.castle&2 == 0 || (occAll&(sqBB[from-1]|sqBB[from-2]|sqBB[from-3])) != 0 {
 					return false
@@ -1595,7 +1421,6 @@ func (p *Position) isLegal(m Move) bool {
 					return false
 				}
 				if d == step {
-					// ok
 				} else if d == 2*step {
 					if from/8 != startRank || (occAll&sqBB[from+step]) != 0 {
 						return false
@@ -1686,7 +1511,6 @@ func (p *Position) isLegal(m Move) bool {
 		}
 	}
 
-	// simulate for king safety
 	ourP, ourN, ourB, ourR, ourQ, ourK := p.pieces[us][Pawn], p.pieces[us][Knight], p.pieces[us][Bishop], p.pieces[us][Rook], p.pieces[us][Queen], p.pieces[us][King]
 	theirP, theirN, theirB, theirR, theirQ, theirK := p.pieces[them][Pawn], p.pieces[them][Knight], p.pieces[them][Bishop], p.pieces[them][Rook], p.pieces[them][Queen], p.pieces[them][King]
 
@@ -1796,13 +1620,9 @@ func (p *Position) isLegal(m Move) bool {
 	if rookAttacks(kingSq, occ2)&(theirR|theirQ) != 0 {
 		return false
 	}
-	// Move is legal, return true
 	return true
 }
 
-// ============================================================================
-// MAKE / UNMAKE
-// ============================================================================
 func (p *Position) makeMove(m Move) Undo {
 	undo := Undo{
 		hash:             p.hash,
@@ -1816,14 +1636,9 @@ func (p *Position) makeMove(m Move) Undo {
 
 	from, to, flags := m.from(), m.to(), m.flags()
 	us, them := p.side, p.side^1
-
-	// operate on local hash
 	h := p.hash
-
-	// flip side hash
 	h ^= zobristSide
 
-	// clear old EP if present
 	if p.epSquare >= 0 {
 		h ^= zobristEP[p.epSquare%8]
 		p.epSquare = -1
@@ -1831,7 +1646,6 @@ func (p *Position) makeMove(m Move) Undo {
 
 	movingPiece := p.square[from] & 7
 
-	// Handle capture (regular or en-passant)
 	if flags&FlagCapture != 0 {
 		capSq := to
 		if flags == FlagEP {
@@ -1841,20 +1655,18 @@ func (p *Position) makeMove(m Move) Undo {
 				capSq = to + 8
 			}
 		}
-		// read captured piece from p.square
 		capturedPiece := p.square[capSq] & 7
 		undo.captured = capturedPiece
 
-		// if a rook is captured on its home square, update castling rights
 		if capturedPiece == Rook {
 			if capSq == 0 {
-				p.castle &^= 2 // WQ
+				p.castle &^= 2
 			} else if capSq == 7 {
-				p.castle &^= 1 // WK
+				p.castle &^= 1
 			} else if capSq == 56 {
-				p.castle &^= 8 // BQ
+				p.castle &^= 8
 			} else if capSq == 63 {
-				p.castle &^= 4 // BK
+				p.castle &^= 4
 			}
 		}
 
@@ -1875,12 +1687,9 @@ func (p *Position) makeMove(m Move) Undo {
 		p.halfmove++
 	}
 
-	// Execute the move
 	if flags == FlagCastle {
-		// king move
 		bbFrom := sqBB[from]
 		bbTo := sqBB[to]
-		// update king bitboard & occupancy
 		p.pieces[us][King] &^= bbFrom
 		p.pieces[us][King] |= bbTo
 		p.occupied[us] &^= bbFrom
@@ -1892,12 +1701,10 @@ func (p *Position) makeMove(m Move) Undo {
 		p.psqScoreEG[us] += pstEnd[us][King][to] - pstEnd[us][King][from]
 		p.square[from] = -1
 		p.square[to] = (us << 3) | King
-
-		// rook move
 		var rf, rt int
-		if to > from { // kingside
+		if to > from {
 			rf, rt = from+3, from+1
-		} else { // queenside
+		} else {
 			rf, rt = from-4, from-1
 		}
 		rfBB := sqBB[rf]
@@ -1915,7 +1722,6 @@ func (p *Position) makeMove(m Move) Undo {
 		p.square[rt] = (us << 3) | Rook
 
 	} else if flags >= FlagPromoN {
-		// promotion: remove pawn from 'from' and set promoted piece on 'to'
 		bbFrom := sqBB[from]
 		p.pieces[us][Pawn] &^= bbFrom
 		p.occupied[us] &^= bbFrom
@@ -1938,7 +1744,6 @@ func (p *Position) makeMove(m Move) Undo {
 		p.square[to] = (us << 3) | promoType
 
 	} else {
-		// normal move (may be capture or quiet)
 		bbFrom := sqBB[from]
 		bbTo := sqBB[to]
 		p.pieces[us][movingPiece] &^= bbFrom
@@ -1953,20 +1758,18 @@ func (p *Position) makeMove(m Move) Undo {
 		p.square[from] = -1
 		p.square[to] = (us << 3) | movingPiece
 
-		// double pawn push -> set ep square
 		if movingPiece == Pawn && abs(to-from) == 16 {
 			p.epSquare = (from + to) / 2
 			h ^= zobristEP[p.epSquare%8]
 		}
 	}
 
-	// update castling rights
 	switch movingPiece {
 	case King:
 		if us == White {
-			p.castle &^= 3 // clear K & Q
+			p.castle &^= 3
 		} else {
-			p.castle &^= 12 // clear k & q
+			p.castle &^= 12
 		}
 	case Rook:
 		switch from {
@@ -1981,8 +1784,6 @@ func (p *Position) makeMove(m Move) Undo {
 		}
 	}
 
-	// Update hash for only the castling rights that changed between the old and new positions.
-	// XOR the bits that differ to maintain incremental hash correctness.
 	changedCastle := undo.castle ^ p.castle
 	if changedCastle&1 != 0 {
 		h ^= zobristCastleWK
@@ -1996,40 +1797,27 @@ func (p *Position) makeMove(m Move) Undo {
 	if changedCastle&8 != 0 {
 		h ^= zobristCastleBQ
 	}
-
-	// flip side and increment fullmove on white = black transition
 	p.side ^= 1
 	if p.side == White {
 		p.fullmove++
 	}
-
 	irreversible := (undo.captured >= 0) || (movingPiece == Pawn)
-
-	// append to repetition history for 3 fold detection
 	p.historyPly++
 	p.historyKeys[p.historyPly] = h
 
 	if irreversible {
 		p.lastIrreversible = p.historyPly
 	}
-
-	// commit hash
 	p.hash = h
-
 	return undo
 }
 
 func (p *Position) unmakeMove(m Move, undo Undo) {
 	from, to, flags := m.from(), m.to(), m.flags()
-	// 'us' is side that made the move
 	us := p.side ^ 1
 	them := p.side
-
-	// restore repetition / history state exactly as before the move
 	p.historyPly = undo.historyPly
 	p.lastIrreversible = undo.lastIrreversible
-
-	// restore side and counters first so subsequent inline ops see correct side
 	p.side = us
 	p.castle = undo.castle
 	p.epSquare = undo.epSquare
@@ -2039,9 +1827,7 @@ func (p *Position) unmakeMove(m Move, undo Undo) {
 		p.fullmove--
 	}
 
-	// Revert move cases (inline inverse of makeMove)
 	if flags == FlagCastle {
-		// king back
 		bbFrom := sqBB[to]
 		bbTo := sqBB[from]
 		p.pieces[us][King] &^= bbFrom
@@ -2055,11 +1841,10 @@ func (p *Position) unmakeMove(m Move, undo Undo) {
 		p.square[to] = -1
 		p.square[from] = (us << 3) | King
 
-		// rook back
 		var rf, rt int
-		if to > from { // kingside: undo rt=from+1 → rf=from+3
+		if to > from {
 			rf, rt = from+1, from+3
-		} else { // queenside: undo rt=from-1 → rf=from-4
+		} else {
 			rf, rt = from-1, from-4
 		}
 
@@ -2077,7 +1862,6 @@ func (p *Position) unmakeMove(m Move, undo Undo) {
 		p.square[rt] = (us << 3) | Rook
 
 	} else if flags >= FlagPromoN {
-		// remove promoted piece from 'to', restore pawn on 'from'
 		promoType := (flags & 3) + Knight
 		bbTo := sqBB[to]
 		p.pieces[us][promoType] &^= bbTo
@@ -2087,8 +1871,6 @@ func (p *Position) unmakeMove(m Move, undo Undo) {
 		p.psqScore[us] -= pst[us][promoType][to]
 		p.psqScoreEG[us] -= pstEnd[us][promoType][to]
 		p.square[to] = -1
-
-		// restore pawn on 'from' inline setPiece(from, us, Pawn)
 		bbFrom := sqBB[from]
 		p.pieces[us][Pawn] |= bbFrom
 		p.occupied[us] |= bbFrom
@@ -2099,10 +1881,9 @@ func (p *Position) unmakeMove(m Move, undo Undo) {
 		p.square[from] = (us << 3) | Pawn
 
 	} else {
-		// normal/unpromoted move: move piece from 'to' back to 'from'
 		movingPt := p.square[to] & 7
 		bbFrom := sqBB[to]
-		bbTo := sqBB[from] // NOTE: "to" and "from" reversed here compared to make
+		bbTo := sqBB[from]
 		p.pieces[us][movingPt] &^= bbFrom
 		p.pieces[us][movingPt] |= bbTo
 		p.occupied[us] &^= bbFrom
@@ -2115,7 +1896,6 @@ func (p *Position) unmakeMove(m Move, undo Undo) {
 		p.square[from] = (us << 3) | movingPt
 	}
 
-	// restore captured piece (if any)
 	if undo.captured >= 0 {
 		capSq := to
 		if flags == FlagEP {
@@ -2134,8 +1914,6 @@ func (p *Position) unmakeMove(m Move, undo Undo) {
 		p.psqScoreEG[them] += pstEnd[them][undo.captured][capSq]
 		p.square[capSq] = (them << 3) | undo.captured
 	}
-
-	// finally restore the saved hash to be 100% identical
 	p.hash = undo.hash
 }
 
@@ -2149,23 +1927,16 @@ func (p *Position) makeNullMove() Undo {
 		historyPly:       p.historyPly,
 	}
 
-	// Flip side and update hash
 	p.side ^= 1
 	p.hash ^= zobristSide
 
-	// Clear EP square if exists
 	if epFile := p.epSquare; epFile != -1 {
 		p.hash ^= zobristEP[epFile%8]
 		p.epSquare = -1
 	}
-
-	// Increment halfmove clock
 	p.halfmove++
-
-	// Update history
 	p.historyPly++
 	p.historyKeys[p.historyPly] = p.hash
-
 	return undo
 }
 
@@ -2179,39 +1950,25 @@ func (p *Position) unmakeNullMove(undo Undo) {
 	p.side ^= 1
 }
 
-// ============================================================================
-// EVALUATION
-// ============================================================================
-// calculateMobilityAndAttacks computes mobility scores AND king attack units
-// Returns: mgScore, egScore, attackUnits
 func (p *Position) calculateMobilityAndAttacks(side int) (mgScore, egScore int, attackUnits int) {
 	us := side
 	them := us ^ 1
 	empty := ^p.all
-
-	// Get opponent's king zone for attack unit calculation
-	// In normal chess, kings are always present, so no need for fallback
 	theirKingBB := p.pieces[them][King]
 	theirKingSq := bits.TrailingZeros64(uint64(theirKingBB))
 	theirKingZone := kingZoneMask[them][theirKingSq]
 
-	// Knight mobility & attacks
 	for bb := p.pieces[us][Knight]; bb != 0; {
 		from := popLSB(&bb)
 		attacks := knightAttacks[from]
-
-		// Mobility: count moves to empty squares
 		mobility := attacks & empty
 		count := bits.OnesCount64(uint64(mobility))
 		mgScore += knightMobilityMG[count]
 		egScore += mobilityEG[count]
-
-		// King safety: count attacks on opponent's king zone
 		kingZoneAttacks := attacks & theirKingZone
 		attackUnits += KnightAttackWeight * bits.OnesCount64(uint64(kingZoneAttacks))
 	}
 
-	// Bishop mobility & attacks
 	for bb := p.pieces[us][Bishop]; bb != 0; {
 		from := popLSB(&bb)
 		attacks := bishopAttacks(from, p.all)
@@ -2225,7 +1982,6 @@ func (p *Position) calculateMobilityAndAttacks(side int) (mgScore, egScore int, 
 		attackUnits += BishopAttackWeight * bits.OnesCount64(uint64(kingZoneAttacks))
 	}
 
-	// Rook mobility & attacks
 	for bb := p.pieces[us][Rook]; bb != 0; {
 		from := popLSB(&bb)
 		attacks := rookAttacks(from, p.all)
@@ -2239,7 +1995,6 @@ func (p *Position) calculateMobilityAndAttacks(side int) (mgScore, egScore int, 
 		attackUnits += RookAttackWeight * bits.OnesCount64(uint64(kingZoneAttacks))
 	}
 
-	// Queen mobility & attacks
 	for bb := p.pieces[us][Queen]; bb != 0; {
 		from := popLSB(&bb)
 		attacks := rookAttacks(from, p.all) | bishopAttacks(from, p.all)
@@ -2256,22 +2011,16 @@ func (p *Position) calculateMobilityAndAttacks(side int) (mgScore, egScore int, 
 	return mgScore, egScore, attackUnits
 }
 
-// evaluateKingSafety calculates the king safety penalty based on attack units
 func (p *Position) evaluateKingSafety(side int, attackUnits int) int {
-	// Safety table lookup with bounds checking
 	if attackUnits >= SafetyTableSize {
 		attackUnits = SafetyTableSize - 1
 	}
 	if attackUnits < 0 {
 		attackUnits = 0
 	}
-
-	// Return negative value (penalty) for being attacked
-	// King safety is primarily a middlegame concern
 	return -safetyTable[attackUnits]
 }
 
-// northFill fills the files north of the set bits
 func northFill(bb Bitboard) Bitboard {
 	bb |= bb << 8
 	bb |= bb << 16
@@ -2279,7 +2028,6 @@ func northFill(bb Bitboard) Bitboard {
 	return bb
 }
 
-// southFill fills the files south of the set bits
 func southFill(bb Bitboard) Bitboard {
 	bb |= bb >> 8
 	bb |= bb >> 16
@@ -2298,8 +2046,6 @@ func (p *Position) evaluatePassedPawns(side int) (mgScore, egScore int) {
 
 	var passedPawns Bitboard
 	if us == White {
-		// Pawns are passed if there are no opposing pawns in front of them on
-		// their own file or on adjacent files
 		frontSpans := southFill(theirPawns)
 		adjacentFileMasks := ((theirPawns >> 1) &^ fileMask[7]) | ((theirPawns << 1) &^ fileMask[0])
 		adjacentFrontSpans := southFill(adjacentFileMasks)
@@ -2328,7 +2074,6 @@ func (p *Position) evaluate() int {
 	b := p.psqScore[White] - p.psqScore[Black]
 	c := p.psqScoreEG[White] - p.psqScoreEG[Black]
 
-	// Get mobility and attack units in single pass
 	wMobMG, wMobEG, wAttackUnits := p.calculateMobilityAndAttacks(White)
 	bMobMG, bMobEG, bAttackUnits := p.calculateMobilityAndAttacks(Black)
 
@@ -2341,8 +2086,6 @@ func (p *Position) evaluate() int {
 	passedMG := wPassMG - bPassMG
 	passedEG := wPassEG - bPassEG
 
-	// Calculate king safety penalties
-	// White's king safety is based on Black's attack units, and vice versa
 	wKingSafety := p.evaluateKingSafety(White, bAttackUnits)
 	bKingSafety := p.evaluateKingSafety(Black, wAttackUnits)
 	kingSafety := wKingSafety - bKingSafety
@@ -2354,7 +2097,7 @@ func (p *Position) evaluate() int {
 	eg += mobilityEG
 	mg += passedMG
 	eg += passedEG
-	mg += kingSafety // King safety is primarily middlegame
+	mg += kingSafety
 
 	ph := p.computePhase()
 	phaseScaled := phaseScale(ph)
@@ -2366,9 +2109,6 @@ func (p *Position) evaluate() int {
 	return score
 }
 
-// ============================================================================
-// MOVE ORDERING
-// ============================================================================
 func (p *Position) orderMoves(moves []Move, bestMove, killer1, killer2 Move) []Move {
 	n := len(moves)
 	if n <= 1 {
@@ -2380,7 +2120,6 @@ func (p *Position) orderMoves(moves []Move, bestMove, killer1, killer2 Move) []M
 
 	side := p.side
 
-	// score moves
 	for i := 0; i < n; i++ {
 		m := moves[i]
 		score := 0
@@ -2413,7 +2152,6 @@ func (p *Position) orderMoves(moves []Move, bestMove, killer1, killer2 Move) []M
 					score = scoreFallbackCapture
 				}
 			} else {
-				// killers
 				if m == killer1 {
 					score = scoreKiller1
 				} else if m == killer2 {
@@ -2427,7 +2165,6 @@ func (p *Position) orderMoves(moves []Move, bestMove, killer1, killer2 Move) []M
 		scores[i] = score
 	}
 
-	// insertion sort by score descending (good for mostly sorted small arrays)
 	for i := 1; i < n; i++ {
 		kMove := moves[i]
 		kScore := scores[i]
@@ -2444,9 +2181,6 @@ func (p *Position) orderMoves(moves []Move, bestMove, killer1, killer2 Move) []M
 	return moves
 }
 
-// ============================================================================
-// QUIESCE
-// ============================================================================
 func (p *Position) quiesce(alpha, beta, ply int, tc *TimeControl) int {
 	p.localNodes++
 
@@ -2456,15 +2190,9 @@ func (p *Position) quiesce(alpha, beta, ply int, tc *TimeControl) int {
 		}
 	}
 
-	// Draw checks
-	if p.isDraw() {
-		return 0
-	}
-
 	inCheck := p.inCheck()
 	best := alpha
 	if !inCheck {
-		// stand-pat
 		stand := p.evaluate()
 		if stand >= beta {
 			return stand
@@ -2472,8 +2200,8 @@ func (p *Position) quiesce(alpha, beta, ply int, tc *TimeControl) int {
 		best = stand
 		if stand > alpha {
 			alpha = stand
-		} // raise alpha after stand-pat
-		if !p.isEndgame() { // Apply delta pruning only in non-endgame positions
+		}
+		if !p.isEndgame() {
 			them := p.side ^ 1
 			maxGain := 0
 			if p.pieces[them][Queen] != 0 {
@@ -2527,7 +2255,6 @@ func (p *Position) quiesce(alpha, beta, ply int, tc *TimeControl) int {
 		}
 	}
 
-	// Checkmate in quiesce
 	if inCheck && legalCount == 0 {
 		score := -Mate + ply
 		return score
@@ -2536,12 +2263,8 @@ func (p *Position) quiesce(alpha, beta, ply int, tc *TimeControl) int {
 	return best
 }
 
-// -------------------------------------------------------------------------------------------
-// NEGAMAX
-// -------------------------------------------------------------------------------------------
 func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeControl, ss *[MaxDepth + 100]SearchStack) int {
 
-	// Increment local counter to avoid atomic overhead
 	p.localNodes++
 
 	if ply <= 1 || (p.localNodes&NodeCheckMaskSearch) == 0 {
@@ -2550,35 +2273,24 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 		}
 	}
 
-	// Early draw return, ensure depth is 0
-	// to not allow pruning with draw entries
-	if p.isDraw() {
-		return 0
-	}
-
-	// Leaf nodes, quiesce time
 	if depth <= 0 {
 		return p.quiesce(alpha, beta, ply, tc)
 	}
 
 	inCheck := p.inCheck()
 
-	origAlpha := alpha // preserved for TT store decision later
+	origAlpha := alpha
 
-	// transposition table probe
 	var hashMove Move
 	if e, found, usable := tt.Probe(p.hash, depth); found {
-		// Unpack the entry once
 		move, score, _, _, flag := e.unpack()
 
-		// if entry stored a move, remember it
 		if move != 0 {
 			hashMove = Move(move)
 		}
 
-		// Validate hash move from TT
 		if hashMove != 0 && !p.isLegal(hashMove) {
-			hashMove = 0 // Discard corrupted or stale TT move
+			hashMove = 0
 		}
 
 		scoreFromTT := int(score)
@@ -2589,13 +2301,11 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 			} else {
 				scoreFromTT += ply
 			}
-			// Keep usability check for non-exact entries
 			if flag != ttFlagExact {
 				usable = false
 			}
 		}
 
-		// If entry can be used to cut off, do so
 		if usable {
 			switch flag {
 			case ttFlagExact:
@@ -2616,8 +2326,6 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 		}
 	}
 
-	// ---- Mate Distance Pruning (MDP) ----
-	// clamp to reachable mate bounds using root distance (ply)
 	if b := Mate - ply; beta > b {
 		beta = b
 		if alpha >= beta {
@@ -2631,17 +2339,16 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 		}
 	}
 
-	// ---- Razoring: d=2 reduce by 1 ply, d=1 drop to qsearch (Non-PV) ----
 	if depth <= 2 && pv == nil && !inCheck && hashMove == 0 && alpha > -Mate+MateScoreGuard && alpha < Mate-MateScoreGuard {
 		eval := p.evaluate()
 		if depth == 2 {
-			if eval <= alpha-Razor2 { // 3.2 pawns
+			if eval <= alpha-Razor2 {
 				if v := p.negamax(depth-1, alpha-1, alpha, ply+1, nil, tc, ss); v < alpha {
 					return v
 				}
 			}
 		} else {
-			if eval <= alpha-Razor1 { // 2.56 pawns
+			if eval <= alpha-Razor1 {
 				if v := p.quiesce(alpha-1, alpha, ply+1, tc); v < alpha {
 					return v
 				}
@@ -2649,11 +2356,6 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 		}
 	}
 
-	// Null Move Pruning (NMP)
-	// Conditions: depth >= 3, not in check, not endgame, non-PV node
-	// Reduction: R = 3 + min(2, depth/6)
-	// Search: Null window [-beta, -beta+1] at depth-R
-	// ---- Null Move Pruning ----
 	if depth >= 3 && !inCheck && !p.isEndgame() && pv == nil {
 		R := nullMoveReduction(depth)
 
@@ -2662,11 +2364,10 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 		p.unmakeNullMove(undo)
 
 		if score >= beta {
-			return beta // Prune
+			return beta
 		}
 	}
 
-	// --- move generation & ordering
 	var movesArr [256]Move
 	n := p.generateMovesTo(movesArr[:], false)
 	moves := p.orderMoves(movesArr[:n], hashMove, ss[ply].killer1, ss[ply].killer2)
@@ -2674,24 +2375,21 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 	bestMove := Move(0)
 	bestScore := -Infinity
 	legalMoves := 0
-	moveNum := 0 // counts legal moves searched so far (used for LMR)
+	moveNum := 0
 	var bestChildPV []Move
 
-	// initialize caller PV to empty
 	if pv != nil {
 		*pv = (*pv)[:0]
 	}
 	pvNode := pv != nil
-	var pvPtr *[]Move // per-child PV pointer
+	var pvPtr *[]Move
 
-	// per-call fixed buffer to avoid repeated small slice allocations for child PVs
 	var childPVBuf [MaxDepth]Move
 
 	for _, m := range moves {
 		if tc.shouldStop() {
 			return alpha
 		}
-		// legality check
 		if !p.isLegal(m) {
 			continue
 		}
@@ -2699,69 +2397,57 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 		legalMoves++
 		moveNum++
 
-		undo := p.makeMove(m) // make the move
+		undo := p.makeMove(m)
 		childPV := childPVBuf[:0]
 		if pvNode && legalMoves == 1 {
-			pvPtr = &childPV // PV child gets a PV buffer
+			pvPtr = &childPV
 		}
 		var score int
-		gaveCheck := p.inCheck()
-
-		// base child depth
-		childDepth := depth - 1
-		// -------------------------
-		// Late Move Reduction (LMR)
-		// -------------------------
-		// Do not reduce in PV nodes or for killer moves.
-		// Conservative: require childDepth, not in check, not giving check,
-		// not a capture/promotion, not the hash move, and late move index.
-		isKiller := false
-		if ply < len(ss) {
-			k := &ss[ply]
-			if m == k.killer1 || m == k.killer2 {
-				isKiller = true
-			}
-		}
-		canReduce := childDepth >= LMRMinChildDepth &&
-			!inCheck && !gaveCheck &&
-			!m.isCapture() && !m.isPromo() &&
-			m != hashMove && moveNum > LMRLateMoveAfter &&
-			!pvNode && !isKiller
-		if canReduce {
-			mm := moveNum
-			if mm > maxLMRMoves {
-				mm = maxLMRMoves
-			}
-			// base reduction from table: index by remaining depth (clamped)
-			d := childDepth
-			if d >= len(lmrTable) {
-				d = len(lmrTable) - 1
-			}
-			red := lmrTable[d][mm]
-
-			// compute effective depth, full search if no room to reduce
-			eff := childDepth - red
-			if eff < 1 {
-				// full search
-				score = -p.negamax(childDepth, -beta, -alpha, ply+1, pvPtr, tc, ss)
-			} else {
-				// reduced null-window, then re-search on raise
-				score = -p.negamax(eff, -alpha-1, -alpha, ply+1, nil, tc, ss)
-				if score > alpha {
-					score = -p.negamax(childDepth, -beta, -alpha, ply+1, pvPtr, tc, ss)
+		if p.isDraw() {
+			score = 0
+		} else {
+			gaveCheck := p.inCheck()
+			childDepth := depth - 1
+			isKiller := false
+			if ply < len(ss) {
+				k := &ss[ply]
+				if m == k.killer1 || m == k.killer2 {
+					isKiller = true
 				}
 			}
-		} else {
-			score = -p.negamax(childDepth, -beta, -alpha, ply+1, pvPtr, tc, ss)
+			canReduce := childDepth >= LMRMinChildDepth &&
+				!inCheck && !gaveCheck &&
+				!m.isCapture() && !m.isPromo() &&
+				m != hashMove && moveNum > LMRLateMoveAfter &&
+				!pvNode && !isKiller
+			if canReduce {
+				mm := moveNum
+				if mm > maxLMRMoves {
+					mm = maxLMRMoves
+				}
+				d := childDepth
+				if d >= len(lmrTable) {
+					d = len(lmrTable) - 1
+				}
+				red := lmrTable[d][mm]
 
+				eff := childDepth - red
+				if eff < 1 {
+					score = -p.negamax(childDepth, -beta, -alpha, ply+1, pvPtr, tc, ss)
+				} else {
+					score = -p.negamax(eff, -alpha-1, -alpha, ply+1, nil, tc, ss)
+					if score > alpha {
+						score = -p.negamax(childDepth, -beta, -alpha, ply+1, pvPtr, tc, ss)
+					}
+				}
+			} else {
+				score = -p.negamax(childDepth, -beta, -alpha, ply+1, pvPtr, tc, ss)
+			}
 		}
 
-		// unmake after both reduced and possible re-search
 		p.unmakeMove(m, undo)
 
-		// beta cutoff
 		if score >= beta {
-			// record killer at this ply
 			if !inCheck && !m.isCapture() && !m.isPromo() && m != 0 && m != hashMove {
 				k := &ss[ply]
 				if m != k.killer1 {
@@ -2769,11 +2455,9 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 				}
 			}
 
-			// fill PV for cutoff so callers see a meaningful PV
 			if pvNode {
 				*pv = append(append((*pv)[:0], m), childPV...)
 			}
-			// Adjust mate scores before storing (root-relative to position-relative)
 			storeScore := score
 			if storeScore > MateValue-MaxDepth {
 				storeScore += ply
@@ -2784,7 +2468,6 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 			return beta
 		}
 
-		// update best found
 		if score > bestScore {
 			bestScore = score
 			bestMove = m
@@ -2793,7 +2476,6 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 			}
 		}
 
-		// alpha improvement
 		if score > alpha {
 			alpha = score
 			if pv != nil {
@@ -2802,30 +2484,25 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 		}
 	}
 
-	// no legal moves -> mate or stalemate
 	if legalMoves == 0 {
 		if inCheck {
-			score := -Mate + ply // node-relative
+			score := -Mate + ply
 			return score
 		}
-		// For stalemate/draw, don't store in TT - just return 0
 		return 0
 	}
 
-	// ensure PV populated if we found a best move but pv still empty
 	if pv != nil && len(*pv) == 0 && bestMove != 0 {
 		*pv = (*pv)[:0]
 		*pv = append(*pv, bestMove)
 		*pv = append(*pv, bestChildPV...)
 	}
 
-	// --- store in transposition table (exact/upper based on origAlpha)
 	flag := ttFlagExact
 	if bestScore <= origAlpha {
 		flag = ttFlagUpper
 	}
 
-	// Adjust mate scores before storing (root-relative to position-relative)
 	storeScore := bestScore
 	if storeScore > Mate-MateScoreGuard {
 		storeScore += ply
@@ -2836,49 +2513,36 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 	return bestScore
 }
 
-// ----------------------------------------------------------------------------
-// SEARCH
-// ----------------------------------------------------------------------------
 func (p *Position) search(tc *TimeControl) Move {
-	// bestMove holds the last adopted PV root move (zero value means none yet).
 	var bestMove Move
-	// Initialize improving for LMR
 	var ss [MaxDepth + 100]SearchStack
 
-	// Clear stop flag for this timecontrol before starting.
 	atomic.StoreInt32(&tc.stopped, 0)
 
-	// decide maximum depth to iterate to
 	maxDepth := tc.depth
 	if maxDepth == 0 || tc.infinite {
 		maxDepth = MaxDepth
 	}
 
-	// iterative deepening
-	var prevScore int       // track score across iterations
-	var havePrev bool       // whether prevScore is valid
-	var stableBestMove Move // Best move from the last COMPLETED depth
+	var prevScore int
+	var havePrev bool
+	var stableBestMove Move
 	var pvBuf [MaxDepth]Move
 	for depth := 1; depth <= maxDepth; depth++ {
 
-		// Reset node counter for this iteration
 		p.localNodes = 0
 
-		// Start timer for this iteration.
 		start := time.Now()
 
-		// Run a full negamax iteration at this depth.
 		pv := pvBuf[:0]
 		var score int
 
 		needFull := false
 		if depth >= AspirationStartDepth && havePrev {
-			// aspiration with depth based widening
 			base := prevScore
 
-			// Mate-guard: skip aspiration if last root score is mate-like
 			if abs(base) >= MateLikeThreshold {
-				needFull = true // mate-like: skip aspiration
+				needFull = true
 			} else {
 
 				window := AspirationBase + depth*AspirationStep
@@ -2894,21 +2558,17 @@ func (p *Position) search(tc *TimeControl) Move {
 			needFull = true
 		}
 		if needFull {
-			pv = pvBuf[:0] // Clear the (potentially stale) PV from the failed aspiration search
+			pv = pvBuf[:0]
 			score = p.negamax(depth, -Infinity, Infinity, 0, &pv, tc, &ss)
 		}
 
-		// If the search was not stopped, store the score for the next aspiration search
-		// This prevents a score from a partial search from corrupting the next iteration's window
 		if !tc.shouldStop() {
 			prevScore = score
 			havePrev = true
 		}
 
-		// Snapshot local nodes for reporting
 		iterNodes := p.localNodes
 
-		// Compute elapsed time for reporting and nps
 		elapsed := time.Since(start)
 		elapsedMs := elapsed.Milliseconds()
 		nps := int64(0)
@@ -2916,38 +2576,31 @@ func (p *Position) search(tc *TimeControl) Move {
 			nps = int64(float64(iterNodes) / elapsed.Seconds())
 		}
 
-		// If the search was stopped during this iteration, don't print partial info.
-		// Catch both explicit Stop() and deadline-driven shouldStop()
 		if tc.shouldStop() {
 			break
 		}
 
-		// If this iteration produced a PV, adopt its root move as the current best
 		if len(pv) > 0 {
 			bestMove = pv[0]
 		}
 
-		// If the search was not stopped, we have completed an iteration, so the current best move is stable
 		if atomic.LoadInt32(&tc.stopped) == 0 && bestMove != 0 {
 			stableBestMove = bestMove
 		}
 
-		// printing for GUI, handles mate score conversions
 		absScore := score
 		if absScore < 0 {
 			absScore = -absScore
 		}
 
-		// Mate confirmation and iterative deepening break
 		if absScore >= MateValue-MaxDepth && bestMove != 0 {
 			stableBestMove = bestMove
-			break // Exit iterative deepening
+			break
 		}
 
-		if absScore >= Mate-MateScoreGuard { // mate-encoded score
-			// convert plies -> moves for UCI
-			matePly := Mate - absScore     // plies to mate
-			mateMoves := (matePly + 1) / 2 // convert to full moves (ceil(plies/2))
+		if absScore >= Mate-MateScoreGuard {
+			matePly := Mate - absScore
+			mateMoves := (matePly + 1) / 2
 			if mateMoves < 1 {
 				mateMoves = 1
 			}
@@ -2959,7 +2612,6 @@ func (p *Position) search(tc *TimeControl) Move {
 					depth, mateMoves, iterNodes, elapsedMs, nps)
 			}
 		} else {
-			// normal centipawn score (already signed relative to side to move)
 			fmt.Printf("info depth %d score cp %d nodes %d time %d nps %d pv",
 				depth, score, iterNodes, elapsedMs, nps)
 		}
@@ -2968,7 +2620,6 @@ func (p *Position) search(tc *TimeControl) Move {
 		}
 		fmt.Println()
 
-		// Early exit on proven mate (either side): commit the current PV move.
 		if absScore >= Mate-MateScoreGuard {
 			if bestMove != 0 && p.isLegal(bestMove) {
 				return bestMove
@@ -2976,14 +2627,11 @@ func (p *Position) search(tc *TimeControl) Move {
 			break
 		}
 
-		// Decide whether to stop before the next iteration. Call shouldStop() once
 		if tc.shouldStop() || !tc.shouldContinue(elapsed) {
 			break
 		}
 	}
 
-	// Prefer current iteration's best; fall back to last stable.
-	// One legality check per candidate.
 	if bestMove != 0 && p.isLegal(bestMove) {
 		return bestMove
 	}
@@ -2991,23 +2639,15 @@ func (p *Position) search(tc *TimeControl) Move {
 		return stableBestMove
 	}
 
-	// No legal move found
 	fmt.Fprintln(os.Stderr, "# Warning: search could not find a legal move to play.")
 	return 0
 }
 
-// ============================================================================
-// TIME MANAGEMENT
-// ============================================================================
 func (tc *TimeControl) Stop() {
 	atomic.StoreInt32(&tc.stopped, 1)
 }
 
 func (tc *TimeControl) allocateTime(side int) {
-	// Time allocation strategy:
-	//   base = min( (remaining_time - reserve)/moves_to_go + increment/2,
-	//               remaining_time/2 )
-	//   Then ensure minimum thinking time
 	if tc.movetime > 0 {
 		tc.deadline = time.Now().Add(time.Duration(tc.movetime) * time.Millisecond)
 		return
@@ -3063,27 +2703,23 @@ func (tc *TimeControl) shouldContinue(lastIter time.Duration) bool {
 	if atomic.LoadInt32(&tc.stopped) != 0 {
 		return false
 	}
-	// Depth/infinite or no prior iteration: allow.
+
 	if tc.infinite || tc.depth > 0 || lastIter <= 0 {
 		return true
 	}
-	// No deadline -> allow.
+
 	if tc.deadline.IsZero() {
 		return true
 	}
-	remain := time.Until(tc.deadline) // monotonic
+	remain := time.Until(tc.deadline)
 	if remain <= 0 {
 		return false
 	}
 
-	// Allow next iteration only if we likely finish it.
 	minRequired := lastIter*nextIterMult + continueMargin
 	return remain > minRequired
 }
 
-// ============================================================================
-// PERFT
-// ============================================================================
 func (p *Position) perft(depth int) int {
 	if depth == 0 {
 		return 1
@@ -3126,12 +2762,8 @@ func (p *Position) perftDivide(depth int) {
 	fmt.Printf("\nTotal: %d\n", total)
 }
 
-// ------------------------------------------------------------------
-// GOROUTINE FOR GUI
-// -----------------------------------------------------------------
 func runSearchAndReport(p *Position, tc *TimeControl) {
 	move := p.search(tc)
-	// Print only if this TC is still current; otherwise drop stale output.
 	if !currentTC.CompareAndSwap(tc, nil) {
 		return
 	}
@@ -3142,11 +2774,7 @@ func runSearchAndReport(p *Position, tc *TimeControl) {
 	}
 }
 
-// ============================================================================
-// UCI PROTOCOL
-// ============================================================================
 func parseSetOption(parts []string) (name, value string) {
-	// find first "name" then first "value" after it
 	nameStart, nameEnd, valueStart := -1, -1, -1
 	for i, p := range parts {
 		if p == "name" && nameStart == -1 {
@@ -3163,16 +2791,14 @@ func parseSetOption(parts []string) (name, value string) {
 		return "", ""
 	}
 	if nameEnd == -1 {
-		// no value token after name; check if there are any tokens for the name
 		if nameStart >= len(parts) {
-			return "", "" // e.g. "setoption name"
+			return "", ""
 		}
 		return strings.Join(parts[nameStart:], " "), ""
 	}
 
-	// "name" and "value" keywords found
 	if nameStart >= nameEnd {
-		return "", "" // e.g. "setoption name value 128"
+		return "", ""
 	}
 	name = strings.Join(parts[nameStart:nameEnd], " ")
 
@@ -3186,10 +2812,10 @@ func parseSetOption(parts []string) (name, value string) {
 func uciLoop() {
 	pos := NewPosition()
 
-	var cmdMutex sync.Mutex // guards TT changes only
+	var cmdMutex sync.Mutex
 
 	scanner := bufio.NewScanner(os.Stdin)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1<<20) // allow long UCI lines
+	scanner.Buffer(make([]byte, 0, 64*1024), 1<<20)
 	fmt.Fprintln(os.Stderr, "# Soomi V1 ready. Type 'help' for available commands.")
 
 	for scanner.Scan() {
@@ -3218,9 +2844,6 @@ func uciLoop() {
 					fmt.Printf("info string invalid hash value: %s\n", value)
 					continue
 				}
-				// stop any running search without holding the mutex, so
-				// if another match is ran immedietly after the previous
-				// one, engine stays responsive
 				if cur := currentTC.Load(); cur != nil {
 					cur.Stop()
 					if currentTC.Load() != nil {
@@ -3228,7 +2851,6 @@ func uciLoop() {
 						continue
 					}
 				}
-				// reinit TT inside a short critical section
 				cmdMutex.Lock()
 				InitTT(sizeMB)
 				cmdMutex.Unlock()
@@ -3239,11 +2861,9 @@ func uciLoop() {
 
 		case "ucinewgame":
 			if cur := currentTC.Swap(nil); cur != nil {
-				// do not block the GUI: request stop and skip TT clear if still running
 				cur.Stop()
 				fmt.Printf("info string ucinewgame: search stopping, TT unchanged\n")
 			} else {
-				// safe to clear TT when idle; no need for a lock as only setoption touches TT
 				tt.Clear()
 			}
 			pos.setStartPos()
@@ -3256,8 +2876,6 @@ func uciLoop() {
 				fmt.Println("# Error: position requires arguments")
 				continue
 			}
-
-			// find "moves" token if present
 			moveIdx := -1
 			for i := 2; i < len(parts); i++ {
 				if parts[i] == "moves" {
@@ -3266,7 +2884,6 @@ func uciLoop() {
 				}
 			}
 
-			// load base position (only startpos is supported)
 			if parts[1] != "startpos" {
 				fmt.Println("info string only 'position startpos [moves ...]' is supported; resetting to startpos")
 				pos.setStartPos()
@@ -3274,7 +2891,6 @@ func uciLoop() {
 			}
 			pos.setStartPos()
 
-			// apply moves if any
 			if moveIdx != -1 && moveIdx+1 < len(parts) {
 				for _, mvStr := range parts[moveIdx+1:] {
 					if len(mvStr) < 4 || len(mvStr) > 5 {
@@ -3299,14 +2915,12 @@ func uciLoop() {
 				}
 			}
 		case "go":
-			// Atomically detach any previous search before starting a new one
 			if cur := currentTC.Swap(nil); cur != nil {
 				cur.Stop()
 			}
 
 			tc := &TimeControl{}
 
-			// parse go args
 			for i := 1; i < len(parts); i++ {
 				switch parts[i] {
 				case "wtime":
@@ -3484,9 +3098,6 @@ Example Usage:
      d`)
 }
 
-// ============================================================================
-// MAIN
-// ============================================================================
 func main() {
 	fmt.Fprintln(os.Stderr, "Soomi V1 - UCI Chess Engine")
 	fmt.Fprintln(os.Stderr, "Type 'help' for available commands or 'uci' to enter UCI mode")
