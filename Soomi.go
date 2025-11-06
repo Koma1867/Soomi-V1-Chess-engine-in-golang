@@ -524,9 +524,6 @@ func initLMR() {
 		lmrTable[d] = flat[offset : offset+rowLen]
 		if d >= LMRMinChildDepth {
 			depthBonus := (d - LMRMinChildDepth) / 10
-			if d <= LMRMinChildDepth {
-				depthBonus = 0
-			}
 			for m := 3; m <= maxLMRMoves; m++ {
 				lmrTable[d][m] = 1 + depthBonus + (m-3)/6
 			}
@@ -580,13 +577,9 @@ func (p *Position) isRepetition() bool {
 		return false
 	}
 	target := p.hash
-	count := 1
 	for i := p.historyPly - 2; i >= p.lastIrreversible; i -= 2 {
 		if p.historyKeys[i] == target {
-			count++
-			if count >= 2 {
-				return true
-			}
+			return true
 		}
 	}
 	return false
@@ -672,11 +665,7 @@ func (t *TranspositionTable) Probe(key uint64, minDepth int) (ttEntry, bool, boo
 }
 
 func (t *TranspositionTable) Save(key uint64, mv Move, score int, depth int, flag uint8) {
-	if depth < 0 {
-		depth = 0
-	} else if depth > 63 {
-		depth = 63
-	}
+	depth = max(0, min(depth, 63))
 	if score > 32767 {
 		score = 32767
 	} else if score < -32768 {
@@ -931,9 +920,6 @@ func initAttacks() {
 }
 
 func initMVVLVATable() {
-	for i := range mvvLvaFlat {
-		mvvLvaFlat[i] = 0
-	}
 	for a := 0; a < 5; a++ {
 		for v := 0; v < 5; v++ {
 			mvvLvaFlat[a*6+v] = pieceValues[v]*MVVLVAWeight - pieceValues[a]
@@ -1302,13 +1288,10 @@ func (p *Position) generateMovesTo(buf []Move, capturesOnly bool) int {
 }
 
 func (p *Position) isLegal(m Move) bool {
-	if m == 0 {
+	if m == 0 || m.from() == m.to() {
 		return false
 	}
 	from, to := m.from(), m.to()
-	if from == to {
-		return false
-	}
 
 	us, them := p.side, p.side^1
 	val := p.square[from]
@@ -2011,13 +1994,8 @@ func (p *Position) calculateMobilityAndAttacks(side int) (mgScore, egScore int, 
 	return mgScore, egScore, attackUnits
 }
 
-func (p *Position) evaluateKingSafety(side int, attackUnits int) int {
-	if attackUnits >= SafetyTableSize {
-		attackUnits = SafetyTableSize - 1
-	}
-	if attackUnits < 0 {
-		attackUnits = 0
-	}
+func (p *Position) evaluateKingSafety(attackUnits int) int {
+	attackUnits = max(0, min(attackUnits, SafetyTableSize-1))
 	return -safetyTable[attackUnits]
 }
 
@@ -2086,8 +2064,8 @@ func (p *Position) evaluate() int {
 	passedMG := wPassMG - bPassMG
 	passedEG := wPassEG - bPassEG
 
-	wKingSafety := p.evaluateKingSafety(White, bAttackUnits)
-	bKingSafety := p.evaluateKingSafety(Black, wAttackUnits)
+	wKingSafety := p.evaluateKingSafety(bAttackUnits)
+	bKingSafety := p.evaluateKingSafety(wAttackUnits)
 	kingSafety := wKingSafety - bKingSafety
 
 	mg := a + b
@@ -2152,11 +2130,12 @@ func (p *Position) orderMoves(moves []Move, bestMove, killer1, killer2 Move) []M
 					score = scoreFallbackCapture
 				}
 			} else {
-				if m == killer1 {
+				switch m {
+				case killer1:
 					score = scoreKiller1
-				} else if m == killer2 {
+				case killer2:
 					score = scoreKiller2
-				} else {
+				default:
 					score = 0
 				}
 			}
@@ -2408,13 +2387,8 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 		} else {
 			gaveCheck := p.inCheck()
 			childDepth := depth - 1
-			isKiller := false
-			if ply < len(ss) {
-				k := &ss[ply]
-				if m == k.killer1 || m == k.killer2 {
-					isKiller = true
-				}
-			}
+			k := &ss[ply]
+			isKiller := m == k.killer1 || m == k.killer2
 			canReduce := childDepth >= LMRMinChildDepth &&
 				!inCheck && !gaveCheck &&
 				!m.isCapture() && !m.isPromo() &&
@@ -2448,7 +2422,7 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 		p.unmakeMove(m, undo)
 
 		if score >= beta {
-			if !inCheck && !m.isCapture() && !m.isPromo() && m != 0 && m != hashMove {
+			if !inCheck && !m.isCapture() && !m.isPromo() && m != hashMove {
 				k := &ss[ply]
 				if m != k.killer1 {
 					k.killer2, k.killer1 = k.killer1, m
