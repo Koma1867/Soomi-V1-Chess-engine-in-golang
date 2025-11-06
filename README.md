@@ -4,11 +4,11 @@ Soomi is a small, educational chess engine written in Go. It implements core che
 
 ## Features
 - Bitboard move generation (now magic) 
-- Evaluation: material, piece-square tables, mobility, passed pawns; middlegame ↔ endgame interpolation (phase blend)  
+- Evaluation: material, piece-square tables, mobility, passed pawns, king safety; middlegame and endgame interpolation (phase blend)  
 - Move ordering: hash move, promotions, MVV-LVA captures, killers  
 - Quiescence search with delta pruning 
 - Transposition table (TT)  
-- Negamax search with alpha-beta, late-move reductions (LMR), razoring, mate-distance pruning  
+- Negamax search with alpha-beta, late-move reductions (LMR), null move pruning (NMP) razoring, mate-distance pruning  
 - UCI loop (works with Arena and other GUIs)  
 - Iterative deepening with depth-based aspiration windows  
 - Simple time control
