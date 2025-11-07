@@ -437,7 +437,6 @@ func rookAttacksClassical(sq int, occ Bitboard) Bitboard {
 	attacks := Bitboard(0)
 	r, f := sq/8, sq%8
 
-	// Vertical directions
 	for _, dr := range []int{1, -1} {
 		for rr := r + dr; rr >= 0 && rr < 8; rr += dr {
 			attacks |= Bitboard(1) << (rr*8 + f)
@@ -447,7 +446,6 @@ func rookAttacksClassical(sq int, occ Bitboard) Bitboard {
 		}
 	}
 
-	// Horizontal directions
 	for _, df := range []int{1, -1} {
 		for ff := f + df; ff >= 0 && ff < 8; ff += df {
 			attacks |= Bitboard(1) << (r*8 + ff)
