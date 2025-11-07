@@ -636,11 +636,7 @@ func (t *TranspositionTable) Probe(key uint64, minDepth int) (ttEntry, bool, boo
 
 func (t *TranspositionTable) Save(key uint64, mv Move, score int, depth int, flag uint8) {
 	depth = max(0, min(depth, 63))
-	if score > 32767 {
-		score = 32767
-	} else if score < -32768 {
-		score = -32768
-	}
+	score = max(min(score, 32767), -32768)
 	newPacked := packEntry(uint32(mv), int16(score), uint8(t.gen), uint8(depth), flag)
 	idx := int(key & t.mask)
 	old := t.entries[idx]
@@ -2268,17 +2264,17 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 		}
 	}
 
-	if b := Mate - ply; beta > b {
-		beta = b
-		if alpha >= beta {
-			return beta
+	if beta > Mate-ply {
+		if alpha >= Mate-ply {
+			return Mate - ply
 		}
+		beta = Mate - ply
 	}
-	if a := -Mate + ply; alpha < a {
-		alpha = a
-		if alpha >= beta {
-			return alpha
+	if alpha < -Mate+ply {
+		if -Mate+ply >= beta {
+			return -Mate + ply
 		}
+		alpha = -Mate + ply
 	}
 
 	if depth <= 2 && pv == nil && !inCheck && hashMove == 0 && alpha > -Mate+MateScoreGuard && alpha < Mate-MateScoreGuard {
@@ -2744,7 +2740,7 @@ func uciLoop() {
 
 	scanner := bufio.NewScanner(os.Stdin)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1<<20)
-	fmt.Fprintln(os.Stderr, "# Soomi V1 ready. Type 'help' for available commands.")
+	fmt.Fprintln(os.Stderr, "# Soomi V1.1 ready. Type 'help' for available commands.")
 
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -2756,7 +2752,7 @@ func uciLoop() {
 
 		switch cmd {
 		case "uci":
-			fmt.Println("id name Soomi V1")
+			fmt.Println("id name Soomi V1.1")
 			fmt.Println("id author Otto Laukkanen")
 			fmt.Println("option name Hash type spin default 256 min 1 max 4096")
 			fmt.Println("uciok")
@@ -2790,10 +2786,8 @@ func uciLoop() {
 		case "ucinewgame":
 			if cur := currentTC.Swap(nil); cur != nil {
 				cur.Stop()
-				fmt.Printf("info string ucinewgame: search stopping, TT unchanged\n")
-			} else {
-				tt.Clear()
 			}
+			tt.Clear()
 			pos.setStartPos()
 
 		case "position":
@@ -2982,7 +2976,7 @@ func uciLoop() {
 }
 
 func printHelp() {
-	fmt.Println(`# Soomi V1 - Available Commands:
+	fmt.Println(`# Soomi V1.1 - Available Commands:
 
 UCI Protocol Commands:
   uci                              - Initialize UCI mode
@@ -3027,7 +3021,7 @@ Example Usage:
 }
 
 func main() {
-	fmt.Fprintln(os.Stderr, "Soomi V1 - UCI Chess Engine")
+	fmt.Fprintln(os.Stderr, "Soomi V1.1 - UCI Chess Engine")
 	fmt.Fprintln(os.Stderr, "Type 'help' for available commands or 'uci' to enter UCI mode")
 	fmt.Fprintln(os.Stderr)
 	uciLoop()
