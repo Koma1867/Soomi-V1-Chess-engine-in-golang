@@ -1995,8 +1995,7 @@ func (p *Position) calculateMobilityAndAttacks(side int) (mgScore, egScore int, 
 }
 
 func (p *Position) evaluateKingSafety(attackUnits int) int {
-	attackUnits = max(0, min(attackUnits, SafetyTableSize-1))
-	return -safetyTable[attackUnits]
+	return -safetyTable[max(0, min(attackUnits, SafetyTableSize-1))]
 }
 
 func northFill(bb Bitboard) Bitboard {
@@ -2068,14 +2067,8 @@ func (p *Position) evaluate() int {
 	bKingSafety := p.evaluateKingSafety(wAttackUnits)
 	kingSafety := wKingSafety - bKingSafety
 
-	mg := a + b
-	eg := a + c
-
-	mg += mobilityMG
-	eg += mobilityEG
-	mg += passedMG
-	eg += passedEG
-	mg += kingSafety
+	mg := a + b + mobilityMG + passedMG + kingSafety
+	eg := a + c + mobilityEG + passedEG
 
 	ph := p.computePhase()
 	phaseScaled := phaseScale(ph)
@@ -2395,14 +2388,8 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 				m != hashMove && moveNum > LMRLateMoveAfter &&
 				!pvNode && !isKiller
 			if canReduce {
-				mm := moveNum
-				if mm > maxLMRMoves {
-					mm = maxLMRMoves
-				}
-				d := childDepth
-				if d >= len(lmrTable) {
-					d = len(lmrTable) - 1
-				}
+				mm := min(moveNum, maxLMRMoves)
+				d := min(childDepth, len(lmrTable)-1)
 				red := lmrTable[d][mm]
 
 				eff := childDepth - red
@@ -2643,10 +2630,7 @@ func (tc *TimeControl) allocateTime(side int) {
 		movesToGo = DefaultMovesToGo
 	}
 
-	usableTime := myTime - minTimeMs
-	if usableTime < 0 {
-		usableTime = 0
-	}
+	usableTime := max(myTime-minTimeMs, 0)
 
 	fromBank := usableTime / int64(movesToGo)
 	capBank := usableTime / perMoveCapDiv
