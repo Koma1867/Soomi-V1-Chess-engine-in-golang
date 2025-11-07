@@ -48,7 +48,7 @@ const (
 
 const (
 	minTimeMs      int64         = 10
-	perMoveCapDiv  int64         = 2
+	perMoveCapDiv  int64         = 3
 	nextIterMult                 = 3
 	continueMargin time.Duration = 10 * time.Millisecond
 )
