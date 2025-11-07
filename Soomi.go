@@ -437,34 +437,25 @@ func rookAttacksClassical(sq int, occ Bitboard) Bitboard {
 	attacks := Bitboard(0)
 	r, f := sq/8, sq%8
 
-	for rr := r + 1; rr < 8; rr++ {
-		attacks |= Bitboard(1) << (rr*8 + f)
-		if occ&(Bitboard(1)<<(rr*8+f)) != 0 {
-			break
+	// Vertical directions
+	for _, dr := range []int{1, -1} {
+		for rr := r + dr; rr >= 0 && rr < 8; rr += dr {
+			attacks |= Bitboard(1) << (rr*8 + f)
+			if occ&(Bitboard(1)<<(rr*8+f)) != 0 {
+				break
+			}
 		}
 	}
 
-	for rr := r - 1; rr >= 0; rr-- {
-		attacks |= Bitboard(1) << (rr*8 + f)
-		if occ&(Bitboard(1)<<(rr*8+f)) != 0 {
-			break
+	// Horizontal directions
+	for _, df := range []int{1, -1} {
+		for ff := f + df; ff >= 0 && ff < 8; ff += df {
+			attacks |= Bitboard(1) << (r*8 + ff)
+			if occ&(Bitboard(1)<<(r*8+ff)) != 0 {
+				break
+			}
 		}
 	}
-
-	for ff := f + 1; ff < 8; ff++ {
-		attacks |= Bitboard(1) << (r*8 + ff)
-		if occ&(Bitboard(1)<<(r*8+ff)) != 0 {
-			break
-		}
-	}
-
-	for ff := f - 1; ff >= 0; ff-- {
-		attacks |= Bitboard(1) << (r*8 + ff)
-		if occ&(Bitboard(1)<<(r*8+ff)) != 0 {
-			break
-		}
-	}
-
 	return attacks
 }
 
@@ -472,34 +463,15 @@ func bishopAttacksClassical(sq int, occ Bitboard) Bitboard {
 	attacks := Bitboard(0)
 	r, f := sq/8, sq%8
 
-	for rr, ff := r+1, f+1; rr < 8 && ff < 8; rr, ff = rr+1, ff+1 {
-		attacks |= Bitboard(1) << (rr*8 + ff)
-		if occ&(Bitboard(1)<<(rr*8+ff)) != 0 {
-			break
+	dirs := [][2]int{{1, 1}, {-1, 1}, {-1, -1}, {1, -1}}
+	for _, dir := range dirs {
+		for rr, ff := r+dir[0], f+dir[1]; rr >= 0 && rr < 8 && ff >= 0 && ff < 8; rr, ff = rr+dir[0], ff+dir[1] {
+			attacks |= Bitboard(1) << (rr*8 + ff)
+			if occ&(Bitboard(1)<<(rr*8+ff)) != 0 {
+				break
+			}
 		}
 	}
-
-	for rr, ff := r-1, f+1; rr >= 0 && ff < 8; rr, ff = rr-1, ff+1 {
-		attacks |= Bitboard(1) << (rr*8 + ff)
-		if occ&(Bitboard(1)<<(rr*8+ff)) != 0 {
-			break
-		}
-	}
-
-	for rr, ff := r-1, f-1; rr >= 0 && ff >= 0; rr, ff = rr-1, ff-1 {
-		attacks |= Bitboard(1) << (rr*8 + ff)
-		if occ&(Bitboard(1)<<(rr*8+ff)) != 0 {
-			break
-		}
-	}
-
-	for rr, ff := r+1, f-1; rr < 8 && ff >= 0; rr, ff = rr+1, ff-1 {
-		attacks |= Bitboard(1) << (rr*8 + ff)
-		if occ&(Bitboard(1)<<(rr*8+ff)) != 0 {
-			break
-		}
-	}
-
 	return attacks
 }
 
