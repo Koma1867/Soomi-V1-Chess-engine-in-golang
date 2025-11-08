@@ -36,8 +36,8 @@ const (
 	AspirationStartDepth = 5
 	DefaultMovesToGo     = 30
 	NodeCheckMaskSearch  = 2047
-	Razor2               = 320
-	Razor1               = 256
+	Razor2               = 285
+	Razor1               = 201
 	DeltaMargin          = 200
 	maxLMRMoves          = 32
 	LMRMinChildDepth     = 3
@@ -104,6 +104,9 @@ const (
 	QueenAttackWeight  = 5
 	PhaseScale         = 256
 	MVVLVAWeight       = 100
+	MarginLMP          = 75
+	LMPMoveThreshold   = 8
+	LMPMaxDepth        = 3
 )
 
 var piecePhase = [6]int{0, 1, 1, 2, 4, 0}
@@ -2335,6 +2338,13 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 		legalMoves++
 		moveNum++
 
+		if !pvNode && depth <= LMPMaxDepth && legalMoves > LMPMoveThreshold && !inCheck && !m.isCapture() {
+			staticEval := p.evaluate()
+			if staticEval < alpha-MarginLMP*depth {
+				return p.quiesce(alpha, beta, ply+1, tc)
+			}
+		}
+
 		undo := p.makeMove(m)
 		childPV := childPVBuf[:0]
 		if pvNode && legalMoves == 1 {
@@ -3028,4 +3038,4 @@ func main() {
 }
 
 // To make an executable
-// go build -trimpath -ldflags "-s -w" -o Soomi.exe soomi.go
+// go build -trimpath -ldflags "-s -w" -o Soomi-V1.1.exe soomi.go
