@@ -13,11 +13,8 @@ import (
 )
 
 const (
-	White = 0
-	Black = 1
-)
-
-const (
+	White  = 0
+	Black  = 1
 	Pawn   = 0
 	Knight = 1
 	Bishop = 2
@@ -27,107 +24,104 @@ const (
 )
 
 const (
-	MaxDepth             = 32
-	Infinity             = 30000
-	MateValue            = 29000
-	Mate                 = MateValue
-	AspirationBase       = 30
-	AspirationStep       = 3
-	AspirationStartDepth = 5
-	DefaultMovesToGo     = 30
-	NodeCheckMaskSearch  = 2047
-	Razor2               = 285
-	Razor1               = 201
-	DeltaMargin          = 200
-	maxLMRMoves          = 32
-	LMRMinChildDepth     = 3
-	LMRLateMoveAfter     = 2
-	MateScoreGuard       = 1000
-	MateLikeThreshold    = Mate - MateScoreGuard
+	MaxDepth                           = 32
+	Infinity                           = 30000
+	MateValue                          = 29000
+	Mate                               = MateValue
+	AspirationBase                     = 30
+	AspirationStep                     = 3
+	AspirationStartDepth               = 5
+	DefaultMovesToGo                   = 30
+	NodeCheckMaskSearch                = 2047
+	Razor2                             = 285
+	Razor1                             = 201
+	DeltaMargin                        = 200
+	maxLMRMoves                        = 32
+	LMRMinChildDepth                   = 3
+	LMRLateMoveAfter                   = 2
+	MateScoreGuard                     = 1000
+	MateLikeThreshold                  = Mate - MateScoreGuard
+	EndgameThreshold                   = 4
+	defaultTTSizeMB                    = 256
+	scoreHash                          = 1000000
+	scorePromoBase                     = 900000
+	scoreCaptureBase                   = 800000
+	scoreKiller1                       = 750000
+	scoreKiller2                       = 740000
+	scoreFallbackCapture               = 700000
+	minTimeMs            int64         = 10
+	perMoveCapDiv        int64         = 3
+	nextIterMult                       = 3
+	continueMargin       time.Duration = 10 * time.Millisecond
+	MaxGamePly                         = 1024
+	ZobristSeed                        = 1070372
+	MarginLMP                          = 75
+	LMPMoveThreshold                   = 8
+	LMPMaxDepth                        = 3
 )
 
 const (
-	minTimeMs      int64         = 10
-	perMoveCapDiv  int64         = 3
-	nextIterMult                 = 3
-	continueMargin time.Duration = 10 * time.Millisecond
-)
-
-const (
-	FlagQuiet   = 0
-	FlagCapture = 4
-	FlagEP      = 5
-	FlagCastle  = 2
-	FlagPromoN  = 8
-	FlagPromoB  = 9
-	FlagPromoR  = 10
-	FlagPromoQ  = 11
-	FlagPromoCN = 12
-	FlagPromoCB = 13
-	FlagPromoCR = 14
-	FlagPromoCQ = 15
-)
-
-const (
-	scoreHash            = 1000000
-	scorePromoBase       = 900000
-	scoreCaptureBase     = 800000
-	scoreKiller1         = 750000
-	scoreKiller2         = 740000
-	scoreFallbackCapture = 700000
-)
-
-const (
+	FlagQuiet         = 0
+	FlagCapture       = 4
+	FlagEP            = 5
+	FlagCastle        = 2
+	FlagPromoN        = 8
+	FlagPromoB        = 9
+	FlagPromoR        = 10
+	FlagPromoQ        = 11
+	FlagPromoCN       = 12
+	FlagPromoCB       = 13
+	FlagPromoCR       = 14
+	FlagPromoCQ       = 15
 	ttFlagExact uint8 = 0
 	ttFlagLower uint8 = 1
 	ttFlagUpper uint8 = 2
 )
 
-const defaultTTSizeMB = 256
-
-const MaxGamePly = 1024
-
 const (
-	KnightMobZeroPoint = 4
-	KnightMobCpPerMove = 3
-	BishopMobZeroPoint = 7
-	BishopMobCpPerMove = 2
-	RookMobZeroPoint   = 7
-	RookMobCpPerMove   = 2
-	QueenMobZeroPoint  = 14
-	QueenMobCpPerMove  = 1
-	EgMobCpPerMove     = 2
-	SafetyTableSize    = 100
-	KnightAttackWeight = 2
-	BishopAttackWeight = 2
-	RookAttackWeight   = 3
-	QueenAttackWeight  = 5
-	PhaseScale         = 256
-	MVVLVAWeight       = 100
-	MarginLMP          = 75
-	LMPMoveThreshold   = 8
-	LMPMaxDepth        = 3
-)
-
-var piecePhase = [6]int{0, 1, 1, 2, 4, 0}
-var totalPhase = piecePhase[Pawn]*16 + piecePhase[Knight]*4 + piecePhase[Bishop]*4 + piecePhase[Rook]*4 + piecePhase[Queen]*2
-
-var (
-	pieceValues = [6]int{100, 320, 330, 500, 950, 20000}
-	pst         [2][6][64]int
-	pstEnd      [2][6][64]int
+	KnightMobZeroPoint   = 4
+	KnightMobCpPerMove   = 3
+	BishopMobZeroPoint   = 7
+	BishopMobCpPerMove   = 2
+	RookMobZeroPoint     = 7
+	RookMobCpPerMove     = 2
+	QueenMobZeroPoint    = 14
+	QueenMobCpPerMove    = 1
+	EgMobCpPerMove       = 2
+	SafetyTableSize      = 100
+	KnightAttackWeight   = 2
+	BishopAttackWeight   = 2
+	RookAttackWeight     = 3
+	QueenAttackWeight    = 5
+	PhaseScale           = 256
+	MVVLVAWeight         = 100
+	MaxKingSafetyPenalty = 150
 )
 
 var (
-	PassedPawnMG = [8]int{0, 5, 12, 22, 36, 56, 84, 0}
-	PassedPawnEG = [8]int{0, 8, 20, 36, 62, 98, 154, 0}
-)
-
-const ZobristSeed = 1070372
-
-var (
-	currentTC atomic.Pointer[TimeControl]
-	tt        *TranspositionTable
+	knightMobilityMG  [9]int
+	bishopMobilityMG  [14]int
+	rookMobilityMG    [15]int
+	queenMobilityMG   [28]int
+	mobilityEG        [28]int
+	safetyTable       [SafetyTableSize]int
+	kingZoneMask      [2][64]Bitboard
+	passedPawnBonusMG [8]int
+	passedPawnBonusEG [8]int
+	fileMask          [8]Bitboard
+	PassedPawnMG      = [8]int{0, 5, 12, 22, 36, 56, 84, 0}
+	PassedPawnEG      = [8]int{0, 8, 20, 36, 62, 98, 154, 0}
+	pieceValues       = [6]int{100, 320, 330, 500, 950, 20000}
+	pst               [2][6][64]int
+	pstEnd            [2][6][64]int
+	totalPhase        = piecePhase[Pawn]*16 + piecePhase[Knight]*4 + piecePhase[Bishop]*4 + piecePhase[Rook]*4 + piecePhase[Queen]*2
+	piecePhase        = [6]int{0, 1, 1, 2, 4, 0}
+	currentTC         atomic.Pointer[TimeControl]
+	tt                *TranspositionTable
+	rookMagics        [64]MagicEntry
+	bishopMagics      [64]MagicEntry
+	rookAttackTable   [102400]Bitboard
+	bishopAttackTable [5248]Bitboard
 )
 
 type MagicEntry struct {
@@ -136,13 +130,6 @@ type MagicEntry struct {
 	shift  uint8
 	offset uint32
 }
-
-var (
-	rookMagics        [64]MagicEntry
-	bishopMagics      [64]MagicEntry
-	rookAttackTable   [102400]Bitboard
-	bishopAttackTable [5248]Bitboard
-)
 
 var rookMagicNumbers = [64]uint64{
 	0x0080001020400080, 0x0040001000200040, 0x0080081000200080, 0x0080040800100080,
@@ -233,25 +220,6 @@ type SearchStack struct {
 	killer2 Move
 }
 
-var (
-	safetyTable  [SafetyTableSize]int
-	kingZoneMask [2][64]Bitboard
-)
-
-var (
-	knightMobilityMG [9]int
-	bishopMobilityMG [14]int
-	rookMobilityMG   [15]int
-	queenMobilityMG  [28]int
-	mobilityEG       [28]int
-)
-
-var (
-	passedPawnBonusMG [8]int
-	passedPawnBonusEG [8]int
-	fileMask          [8]Bitboard
-)
-
 func (p *Position) computePhase() int {
 	rem := 0
 	for pt := Knight; pt <= Queen; pt++ {
@@ -270,7 +238,7 @@ func (p *Position) computePhase() int {
 
 func (p *Position) isEndgame() bool {
 	phase := p.computePhase()
-	return phase < totalPhase/4
+	return phase < totalPhase/EndgameThreshold
 }
 
 func phaseScale(ph int) int {
@@ -280,8 +248,8 @@ func phaseScale(ph int) int {
 func initSafetyTable() {
 	for i := 0; i < SafetyTableSize; i++ {
 		safetyTable[i] = (i * i) / 4
-		if safetyTable[i] > 150 {
-			safetyTable[i] = 150
+		if safetyTable[i] > MaxKingSafetyPenalty {
+			safetyTable[i] = MaxKingSafetyPenalty
 		}
 	}
 }
@@ -920,7 +888,7 @@ func nullMoveReduction(depth int) int {
 	return 3 + min(2, depth/6)
 }
 
-func makeMove(from, to, flags int) Move {
+func makeMoves(from, to, flags int) Move {
 	return Move(from | (to << 6) | (flags << 12))
 }
 
@@ -1091,37 +1059,37 @@ func (p *Position) generateMovesTo(buf []Move, capturesOnly bool) int {
 
 		if from>>3 == promoRank {
 			if !capturesOnly && to >= 0 && to < 64 && occAll&sqBB[to] == 0 {
-				buf[i] = makeMove(from, to, FlagPromoQ)
+				buf[i] = makeMoves(from, to, FlagPromoQ)
 				i++
-				buf[i] = makeMove(from, to, FlagPromoR)
+				buf[i] = makeMoves(from, to, FlagPromoR)
 				i++
-				buf[i] = makeMove(from, to, FlagPromoB)
+				buf[i] = makeMoves(from, to, FlagPromoB)
 				i++
-				buf[i] = makeMove(from, to, FlagPromoN)
+				buf[i] = makeMoves(from, to, FlagPromoN)
 				i++
 			}
 
 			attacks := pawnAttacks[us][from] & occThem
 			for att := attacks; att != 0; {
 				to := popLSB(&att)
-				buf[i] = makeMove(from, to, FlagPromoCQ)
+				buf[i] = makeMoves(from, to, FlagPromoCQ)
 				i++
-				buf[i] = makeMove(from, to, FlagPromoCR)
+				buf[i] = makeMoves(from, to, FlagPromoCR)
 				i++
-				buf[i] = makeMove(from, to, FlagPromoCB)
+				buf[i] = makeMoves(from, to, FlagPromoCB)
 				i++
-				buf[i] = makeMove(from, to, FlagPromoCN)
+				buf[i] = makeMoves(from, to, FlagPromoCN)
 				i++
 			}
 		} else {
 			if !capturesOnly && to >= 0 && to < 64 && occAll&sqBB[to] == 0 {
-				buf[i] = makeMove(from, to, FlagQuiet)
+				buf[i] = makeMoves(from, to, FlagQuiet)
 				i++
 
 				if from>>3 == dblRank {
 					to2 := from + dblPush
 					if to2 >= 0 && to2 < 64 && occAll&sqBB[to2] == 0 {
-						buf[i] = makeMove(from, to2, FlagQuiet)
+						buf[i] = makeMoves(from, to2, FlagQuiet)
 						i++
 					}
 				}
@@ -1130,13 +1098,13 @@ func (p *Position) generateMovesTo(buf []Move, capturesOnly bool) int {
 			attacks := pawnAttacks[us][from] & occThem
 			for att := attacks; att != 0; {
 				to := popLSB(&att)
-				buf[i] = makeMove(from, to, FlagCapture)
+				buf[i] = makeMoves(from, to, FlagCapture)
 				i++
 			}
 
 			if ep >= 0 && ep < 64 {
 				if pawnAttacks[us][from]&sqBB[ep] != 0 {
-					buf[i] = makeMove(from, ep, FlagEP)
+					buf[i] = makeMoves(from, ep, FlagEP)
 					i++
 				}
 			}
@@ -1155,7 +1123,7 @@ func (p *Position) generateMovesTo(buf []Move, capturesOnly bool) int {
 			if occThem&sqBB[to] != 0 {
 				flag = FlagCapture
 			}
-			buf[i] = makeMove(from, to, flag)
+			buf[i] = makeMoves(from, to, flag)
 			i++
 		}
 	}
@@ -1172,7 +1140,7 @@ func (p *Position) generateMovesTo(buf []Move, capturesOnly bool) int {
 			if occThem&sqBB[to] != 0 {
 				flag = FlagCapture
 			}
-			buf[i] = makeMove(from, to, flag)
+			buf[i] = makeMoves(from, to, flag)
 			i++
 		}
 	}
@@ -1189,7 +1157,7 @@ func (p *Position) generateMovesTo(buf []Move, capturesOnly bool) int {
 			if occThem&sqBB[to] != 0 {
 				flag = FlagCapture
 			}
-			buf[i] = makeMove(from, to, flag)
+			buf[i] = makeMoves(from, to, flag)
 			i++
 		}
 	}
@@ -1206,7 +1174,7 @@ func (p *Position) generateMovesTo(buf []Move, capturesOnly bool) int {
 			if occThem&sqBB[to] != 0 {
 				flag = FlagCapture
 			}
-			buf[i] = makeMove(from, to, flag)
+			buf[i] = makeMoves(from, to, flag)
 			i++
 		}
 	}
@@ -1223,7 +1191,7 @@ func (p *Position) generateMovesTo(buf []Move, capturesOnly bool) int {
 			if occThem&sqBB[to] != 0 {
 				flag = FlagCapture
 			}
-			buf[i] = makeMove(kingSq, to, flag)
+			buf[i] = makeMoves(kingSq, to, flag)
 			i++
 		}
 	}
@@ -1232,23 +1200,23 @@ func (p *Position) generateMovesTo(buf []Move, capturesOnly bool) int {
 		if us == White {
 			if p.castle&1 != 0 && occAll&0x60 == 0 &&
 				!p.isAttacked(5, Black) && !p.isAttacked(6, Black) {
-				buf[i] = makeMove(4, 6, FlagCastle)
+				buf[i] = makeMoves(4, 6, FlagCastle)
 				i++
 			}
 			if p.castle&2 != 0 && occAll&0x0E == 0 &&
 				!p.isAttacked(3, Black) && !p.isAttacked(2, Black) {
-				buf[i] = makeMove(4, 2, FlagCastle)
+				buf[i] = makeMoves(4, 2, FlagCastle)
 				i++
 			}
 		} else {
 			if p.castle&4 != 0 && occAll&(0x60<<56) == 0 &&
 				!p.isAttacked(61, White) && !p.isAttacked(62, White) {
-				buf[i] = makeMove(60, 62, FlagCastle)
+				buf[i] = makeMoves(60, 62, FlagCastle)
 				i++
 			}
 			if p.castle&8 != 0 && occAll&(0x0E<<56) == 0 &&
 				!p.isAttacked(59, White) && !p.isAttacked(58, White) {
-				buf[i] = makeMove(60, 58, FlagCastle)
+				buf[i] = makeMoves(60, 58, FlagCastle)
 				i++
 			}
 		}
