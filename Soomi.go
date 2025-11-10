@@ -2718,7 +2718,7 @@ func uciLoop() {
 
 	scanner := bufio.NewScanner(os.Stdin)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1<<20)
-	fmt.Fprintln(os.Stderr, "# Soomi V1.1 ready. Type 'help' for available commands.")
+	fmt.Fprintln(os.Stderr, "# Soomi V1.1.1 ready. Type 'help' for available commands.")
 
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -2730,7 +2730,7 @@ func uciLoop() {
 
 		switch cmd {
 		case "uci":
-			fmt.Println("id name Soomi V1.1")
+			fmt.Println("id name Soomi V1.1.1")
 			fmt.Println("id author Otto Laukkanen")
 			fmt.Println("option name Hash type spin default 256 min 1 max 4096")
 			fmt.Println("uciok")
@@ -2954,7 +2954,7 @@ func uciLoop() {
 }
 
 func printHelp() {
-	fmt.Println(`# Soomi V1.1 - Available Commands:
+	fmt.Println(`# Soomi V1.1.1 - Available Commands:
 
 UCI Protocol Commands:
   uci                              - Initialize UCI mode
@@ -2999,11 +2999,11 @@ Example Usage:
 }
 
 func main() {
-	fmt.Fprintln(os.Stderr, "Soomi V1.1 - UCI Chess Engine")
+	fmt.Fprintln(os.Stderr, "Soomi V1.1.1- UCI Chess Engine")
 	fmt.Fprintln(os.Stderr, "Type 'help' for available commands or 'uci' to enter UCI mode")
 	fmt.Fprintln(os.Stderr)
 	uciLoop()
 }
 
 // To make an executable
-// go build -trimpath -ldflags "-s -w" -o Soomi-V1.1.exe soomi.go
+// go build -trimpath -ldflags "-s -w" -o Soomi-V1.1.1.exe soomi.go
