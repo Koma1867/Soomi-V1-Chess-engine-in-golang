@@ -32,7 +32,7 @@ const (
 	AspirationStep                     = 3
 	AspirationStartDepth               = 5
 	DefaultMovesToGo                   = 30
-	NodeCheckMaskSearch                = 2047
+	NodeCheckMaskSearch                = 1023
 	Razor2                             = 285
 	Razor1                             = 201
 	DeltaMargin                        = 200
@@ -50,8 +50,8 @@ const (
 	scoreKiller2                       = 740000
 	scoreFallbackCapture               = 700000
 	minTimeMs            int64         = 10
-	perMoveCapDiv        int64         = 3
-	nextIterMult                       = 3
+	perMoveCapDiv        int64         = 2
+	nextIterMult                       = 2
 	continueMargin       time.Duration = 10 * time.Millisecond
 	MaxGamePly                         = 1024
 	ZobristSeed                        = 1070372
@@ -1960,14 +1960,14 @@ func (p *Position) evaluatePassedPawns(side int) (mgScore, egScore int) {
 
 	var passedPawns Bitboard
 	if us == White {
-		frontSpans := southFill(theirPawns)
+		frontSpans := southFill(theirPawns >> 8)
 		adjacentFileMasks := ((theirPawns >> 1) &^ fileMask[7]) | ((theirPawns << 1) &^ fileMask[0])
-		adjacentFrontSpans := southFill(adjacentFileMasks)
+		adjacentFrontSpans := southFill(adjacentFileMasks >> 8)
 		passedPawns = ourPawns &^ frontSpans &^ adjacentFrontSpans
 	} else {
-		frontSpans := northFill(theirPawns)
+		frontSpans := northFill(theirPawns << 8)
 		adjacentFileMasks := ((theirPawns >> 1) &^ fileMask[7]) | ((theirPawns << 1) &^ fileMask[0])
-		adjacentFrontSpans := northFill(adjacentFileMasks)
+		adjacentFrontSpans := northFill(adjacentFileMasks << 8)
 		passedPawns = ourPawns &^ frontSpans &^ adjacentFrontSpans
 	}
 
@@ -2093,7 +2093,7 @@ func (p *Position) orderMoves(moves []Move, bestMove, killer1, killer2 Move) []M
 func (p *Position) quiesce(alpha, beta, ply int, tc *TimeControl) int {
 	p.localNodes++
 
-	if ply <= 1 || (p.localNodes&NodeCheckMaskSearch) == 0 {
+	if (p.localNodes & NodeCheckMaskSearch) == 0 {
 		if tc.shouldStop() {
 			return alpha
 		}
@@ -2176,7 +2176,7 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 
 	p.localNodes++
 
-	if ply <= 1 || (p.localNodes&NodeCheckMaskSearch) == 0 {
+	if (p.localNodes & NodeCheckMaskSearch) == 0 {
 		if tc.shouldStop() {
 			return alpha
 		}
@@ -2718,7 +2718,7 @@ func uciLoop() {
 
 	scanner := bufio.NewScanner(os.Stdin)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1<<20)
-	fmt.Fprintln(os.Stderr, "# Soomi V1.1.1 ready. Type 'help' for available commands.")
+	fmt.Fprintln(os.Stderr, "# Soomi V1.1.2 ready. Type 'help' for available commands.")
 
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -2730,7 +2730,7 @@ func uciLoop() {
 
 		switch cmd {
 		case "uci":
-			fmt.Println("id name Soomi V1.1.1")
+			fmt.Println("id name Soomi V1.1.2")
 			fmt.Println("id author Otto Laukkanen")
 			fmt.Println("option name Hash type spin default 256 min 1 max 4096")
 			fmt.Println("uciok")
@@ -2954,7 +2954,7 @@ func uciLoop() {
 }
 
 func printHelp() {
-	fmt.Println(`# Soomi V1.1.1 - Available Commands:
+	fmt.Println(`# Soomi V1.1.2 - Available Commands:
 
 UCI Protocol Commands:
   uci                              - Initialize UCI mode
@@ -2999,11 +2999,11 @@ Example Usage:
 }
 
 func main() {
-	fmt.Fprintln(os.Stderr, "Soomi V1.1.1- UCI Chess Engine")
+	fmt.Fprintln(os.Stderr, "Soomi V1.1.2 - UCI Chess Engine")
 	fmt.Fprintln(os.Stderr, "Type 'help' for available commands or 'uci' to enter UCI mode")
 	fmt.Fprintln(os.Stderr)
 	uciLoop()
 }
 
 // To make an executable
-// go build -trimpath -ldflags "-s -w" -o Soomi-V1.1.1.exe soomi.go
+// go build -trimpath -ldflags "-s -w" -o Soomi-V1.1.2.exe soomi.go
