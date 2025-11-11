@@ -25,6 +25,14 @@ Soomi is a small, educational chess engine written in Go. It implements core che
 3. go build -o Soomi.exe soomi.go (provides normal, about 2500kb)
 4. go build -trimpath -ldflags "-s -w" -o Soomi.exe soomi.go (smaller, about 1700 kb)
 
+## Current issues/bugs
+1. LMP seems too aggressive, perhaps causing a lot of search instability for what its worth.
+2. Passed pawns has an issue detecting if a pawn is passed if enemy has a pawn on the same rank.
+3. Mate scores not printed when exiting on a forced mate found.
+4. During fast time controls info is not printed for some reason.
+5. Pv lines truncated, very ugly looking.
+I am focused currently on fixing each one of these.
+
 Any suggestions are welcome on how to improve the engine.
 License is completely free to distribute as long as you mention the origin.
 
