@@ -31,6 +31,8 @@ Soomi is a small, educational chess engine written in Go. It implements core che
 3. Mate scores not printed when exiting on a forced mate found.
 4. During fast time controls info is not printed for some reason.
 5. Pv lines truncated, very ugly looking.
+6. Generatemovesto generates illegal pawn double pushes, although they are rejected by isLegal. Worth looking into.
+7. IsDraw doesnt know about insufficient material, meaning engine might trade a possibly won endgame into bare knight/bishop upon not seeing its a draw.
 I am focused currently on fixing each one of these.
 
 Any suggestions are welcome on how to improve the engine.
