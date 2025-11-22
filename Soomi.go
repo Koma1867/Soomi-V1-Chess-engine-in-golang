@@ -2215,6 +2215,10 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 			}
 		}
 
+		if pv != nil {
+			usable = false
+		}
+
 		if usable {
 			switch flag {
 			case ttFlagExact:
@@ -2315,7 +2319,7 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 
 		undo := p.makeMove(m)
 		childPV := childPVBuf[:0]
-		if pvNode && legalMoves == 1 {
+		if pvNode {
 			pvPtr = &childPV
 		}
 		var score int
@@ -2338,7 +2342,14 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 
 				eff := childDepth - red
 				if eff < 1 {
-					score = -p.negamax(childDepth, -beta, -alpha, ply+1, pvPtr, tc, ss)
+					if legalMoves > 1 && pvNode {
+						score = -p.negamax(childDepth, -alpha-1, -alpha, ply+1, nil, tc, ss)
+						if score > alpha {
+							score = -p.negamax(childDepth, -beta, -alpha, ply+1, pvPtr, tc, ss)
+						}
+					} else {
+						score = -p.negamax(childDepth, -beta, -alpha, ply+1, pvPtr, tc, ss)
+					}
 				} else {
 					score = -p.negamax(eff, -alpha-1, -alpha, ply+1, nil, tc, ss)
 					if score > alpha {
@@ -2346,7 +2357,14 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 					}
 				}
 			} else {
-				score = -p.negamax(childDepth, -beta, -alpha, ply+1, pvPtr, tc, ss)
+				if legalMoves > 1 && pvNode {
+					score = -p.negamax(childDepth, -alpha-1, -alpha, ply+1, nil, tc, ss)
+					if score > alpha {
+						score = -p.negamax(childDepth, -beta, -alpha, ply+1, pvPtr, tc, ss)
+					}
+				} else {
+					score = -p.negamax(childDepth, -beta, -alpha, ply+1, pvPtr, tc, ss)
+				}
 			}
 		}
 
@@ -2496,11 +2514,6 @@ func (p *Position) search(tc *TimeControl) Move {
 		absScore := score
 		if absScore < 0 {
 			absScore = -absScore
-		}
-
-		if absScore >= MateValue-MaxDepth && bestMove != 0 {
-			stableBestMove = bestMove
-			break
 		}
 
 		if absScore >= Mate-MateScoreGuard {
@@ -2718,7 +2731,7 @@ func uciLoop() {
 
 	scanner := bufio.NewScanner(os.Stdin)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1<<20)
-	fmt.Fprintln(os.Stderr, "# Soomi V1.1.2 ready. Type 'help' for available commands.")
+	fmt.Fprintln(os.Stderr, "# Soomi V1.1.3 ready. Type 'help' for available commands.")
 
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -2730,7 +2743,7 @@ func uciLoop() {
 
 		switch cmd {
 		case "uci":
-			fmt.Println("id name Soomi V1.1.2")
+			fmt.Println("id name Soomi V1.1.3")
 			fmt.Println("id author Otto Laukkanen")
 			fmt.Println("option name Hash type spin default 256 min 1 max 4096")
 			fmt.Println("uciok")
@@ -2954,7 +2967,7 @@ func uciLoop() {
 }
 
 func printHelp() {
-	fmt.Println(`# Soomi V1.1.2 - Available Commands:
+	fmt.Println(`# Soomi V1.1.3 - Available Commands:
 
 UCI Protocol Commands:
   uci                              - Initialize UCI mode
@@ -2999,11 +3012,11 @@ Example Usage:
 }
 
 func main() {
-	fmt.Fprintln(os.Stderr, "Soomi V1.1.2 - UCI Chess Engine")
+	fmt.Fprintln(os.Stderr, "Soomi V1.1.3 - UCI Chess Engine")
 	fmt.Fprintln(os.Stderr, "Type 'help' for available commands or 'uci' to enter UCI mode")
 	fmt.Fprintln(os.Stderr)
 	uciLoop()
 }
 
 // To make an executable
-// go build -trimpath -ldflags "-s -w" -o Soomi-V1.1.2.exe soomi.go
+// go build -trimpath -ldflags "-s -w" -o Soomi-V1.1.3.exe soomi.go
