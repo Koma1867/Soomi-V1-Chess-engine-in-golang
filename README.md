@@ -34,6 +34,9 @@ go build -o Soomi.exe soomi.go
 
 # Optimized/Smaller build (strips debug info)
 go build -trimpath -ldflags "-s -w" -o Soomi.exe soomi.go
+
+# Disabling go bounds checking, perhaps 5% faster
+go build -trimpath -ldflags "-s -w" -gcflags "all=-B" -o Soomi-V1.1.3.exe soomi.go
 ```
 
 ## Current Issues
