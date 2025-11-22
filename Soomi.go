@@ -2726,9 +2726,7 @@ func parseSetOption(parts []string) (name, value string) {
 
 func uciLoop() {
 	pos := NewPosition()
-
 	var cmdMutex sync.Mutex
-
 	scanner := bufio.NewScanner(os.Stdin)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1<<20)
 	fmt.Fprintln(os.Stderr, "# Soomi V1.1.3 ready. Type 'help' for available commands.")
@@ -3019,4 +3017,4 @@ func main() {
 }
 
 // To make an executable
-// go build -trimpath -ldflags "-s -w" -o Soomi-V1.1.3.exe soomi.go
+// go build -trimpath -ldflags "-s -w" -gcflags "all=-B" -o Soomi-V1.1.3.exe soomi.go
