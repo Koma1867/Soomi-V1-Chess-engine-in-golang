@@ -106,11 +106,9 @@ var (
 	mobilityEG        [28]int
 	safetyTable       [SafetyTableSize]int
 	kingZoneMask      [2][64]Bitboard
-	passedPawnBonusMG [8]int
-	passedPawnBonusEG [8]int
+	passedPawnBonusMG = [8]int{0, 5, 12, 22, 36, 56, 84, 0}
+	passedPawnBonusEG = [8]int{0, 8, 20, 36, 62, 98, 154, 0}
 	fileMask          [8]Bitboard
-	PassedPawnMG      = [8]int{0, 5, 12, 22, 36, 56, 84, 0}
-	PassedPawnEG      = [8]int{0, 8, 20, 36, 62, 98, 154, 0}
 	pieceValues       = [6]int{100, 320, 330, 500, 950, 20000}
 	pst               [2][6][64]int
 	pstEnd            [2][6][64]int
@@ -180,7 +178,6 @@ type Position struct {
 	castle           int
 	epSquare         int
 	halfmove         int
-	fullmove         int
 	hash             uint64
 	material         [2]int
 	psqScore         [2]int
@@ -494,9 +491,6 @@ func initPassedPawns() {
 	for i := 0; i < 8; i++ {
 		fileMask[i] = 0x0101010101010101 << i
 	}
-
-	passedPawnBonusMG = PassedPawnMG
-	passedPawnBonusEG = PassedPawnEG
 }
 
 var (
@@ -931,7 +925,6 @@ func (p *Position) setStartPos() {
 	p.side = White
 	p.castle = 0xF
 	p.epSquare = -1
-	p.fullmove = 1
 
 	setPiece := func(sq, c, pc int) {
 		bb := sqBB[sq]
@@ -1431,23 +1424,7 @@ func (p *Position) isLegal(m Move) bool {
 		}
 	}
 
-	ourP, ourN, ourB, ourR, ourQ, ourK := p.pieces[us][Pawn], p.pieces[us][Knight], p.pieces[us][Bishop], p.pieces[us][Rook], p.pieces[us][Queen], p.pieces[us][King]
 	theirP, theirN, theirB, theirR, theirQ, theirK := p.pieces[them][Pawn], p.pieces[them][Knight], p.pieces[them][Bishop], p.pieces[them][Rook], p.pieces[them][Queen], p.pieces[them][King]
-
-	switch pt {
-	case Pawn:
-		ourP &^= fromBB
-	case Knight:
-		ourN &^= fromBB
-	case Bishop:
-		ourB &^= fromBB
-	case Rook:
-		ourR &^= fromBB
-	case Queen:
-		ourQ &^= fromBB
-	case King:
-		ourK &^= fromBB
-	}
 
 	if m.isCapture() {
 		capSq := to
@@ -1474,55 +1451,30 @@ func (p *Position) isLegal(m Move) bool {
 		}
 	}
 
-	if m.isPromo() {
-		switch m.promoType() {
-		case Queen:
-			ourQ |= toBB
-		case Rook:
-			ourR |= toBB
-		case Bishop:
-			ourB |= toBB
-		case Knight:
-			ourN |= toBB
-		default:
-			return false
-		}
-	} else {
-		switch pt {
-		case Pawn:
-			ourP |= toBB
-		case Knight:
-			ourN |= toBB
-		case Bishop:
-			ourB |= toBB
-		case Rook:
-			ourR |= toBB
-		case Queen:
-			ourQ |= toBB
-		case King:
-			ourK |= toBB
-		}
-	}
-
+	occ2 := p.all&^fromBB | toBB
 	if flags == FlagCastle {
 		if to > from {
-			ourR &^= sqBB[from+3]
-			ourR |= sqBB[from+1]
+			occ2 &^= sqBB[from+3]
+			occ2 |= sqBB[from+1]
 		} else {
-			ourR &^= sqBB[from-4]
-			ourR |= sqBB[from-1]
+			occ2 &^= sqBB[from-4]
+			occ2 |= sqBB[from-1]
+		}
+	} else if flags == FlagEP {
+		if us == White {
+			occ2 &^= sqBB[to-8]
+		} else {
+			occ2 &^= sqBB[to+8]
 		}
 	}
-
-	occ2 := (ourP | ourN | ourB | ourR | ourQ | ourK) | (theirP | theirN | theirB | theirR | theirQ | theirK)
 	var kingSq int
 	if pt == King {
 		kingSq = to
 	} else {
-		if ourK == 0 {
+		if p.pieces[us][King] == 0 {
 			return false
 		}
-		kingSq = bits.TrailingZeros64(uint64(ourK))
+		kingSq = bits.TrailingZeros64(uint64(p.pieces[us][King]))
 	}
 
 	if pawnAttacks[them^1][kingSq]&theirP != 0 {
@@ -1718,9 +1670,6 @@ func (p *Position) makeMove(m Move) Undo {
 		h ^= zobristCastleBQ
 	}
 	p.side ^= 1
-	if p.side == White {
-		p.fullmove++
-	}
 	irreversible := (undo.captured >= 0) || (movingPiece == Pawn)
 	p.historyPly++
 	p.historyKeys[p.historyPly] = h
@@ -1742,10 +1691,6 @@ func (p *Position) unmakeMove(m Move, undo Undo) {
 	p.castle = undo.castle
 	p.epSquare = undo.epSquare
 	p.halfmove = undo.halfmove
-
-	if p.side == Black {
-		p.fullmove--
-	}
 
 	if flags == FlagCastle {
 		bbFrom := sqBB[to]
@@ -2066,10 +2011,10 @@ func (p *Position) orderMoves(moves []Move, bestMove, killer1, killer2 Move) []M
 				case killer2:
 					score = scoreKiller2
 				default:
-					score = 0
+					piece := p.square[m.from()] & 7
+					score = pst[side][piece][m.to()] - pst[side][piece][m.from()]
 				}
 			}
-
 		}
 		scores[i] = score
 	}
@@ -2729,7 +2674,7 @@ func uciLoop() {
 	var cmdMutex sync.Mutex
 	scanner := bufio.NewScanner(os.Stdin)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1<<20)
-	fmt.Fprintln(os.Stderr, "# Soomi V1.1.3 ready. Type 'help' for available commands.")
+	fmt.Fprintln(os.Stderr, "# Soomi V1.1.4 ready. Type 'help' for available commands.")
 
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -2741,7 +2686,7 @@ func uciLoop() {
 
 		switch cmd {
 		case "uci":
-			fmt.Println("id name Soomi V1.1.3")
+			fmt.Println("id name Soomi V1.1.4")
 			fmt.Println("id author Otto Laukkanen")
 			fmt.Println("option name Hash type spin default 256 min 1 max 4096")
 			fmt.Println("uciok")
@@ -2965,7 +2910,7 @@ func uciLoop() {
 }
 
 func printHelp() {
-	fmt.Println(`# Soomi V1.1.3 - Available Commands:
+	fmt.Println(`# Soomi V1.1.4 - Available Commands:
 
 UCI Protocol Commands:
   uci                              - Initialize UCI mode
@@ -3010,11 +2955,11 @@ Example Usage:
 }
 
 func main() {
-	fmt.Fprintln(os.Stderr, "Soomi V1.1.3 - UCI Chess Engine")
+	fmt.Fprintln(os.Stderr, "Soomi V1.1.4 - UCI Chess Engine")
 	fmt.Fprintln(os.Stderr, "Type 'help' for available commands or 'uci' to enter UCI mode")
 	fmt.Fprintln(os.Stderr)
 	uciLoop()
 }
 
 // To make an executable
-// go build -trimpath -ldflags "-s -w" -gcflags "all=-B" -o Soomi-V1.1.3.exe soomi.go
+// go build -trimpath -ldflags "-s -w" -gcflags "all=-B" -o Soomi-V1.1.4.exe soomi.go
