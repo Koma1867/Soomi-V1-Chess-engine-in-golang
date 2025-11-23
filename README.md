@@ -1,4 +1,4 @@
-# Soomi — Minimal Chess Engine (Go)
+# Soomi Chess Engine (Go)
 
 <p align="center">
   <img src="Soomi_logo.png" alt="Soomi Chess Engine Logo" width="1000">
