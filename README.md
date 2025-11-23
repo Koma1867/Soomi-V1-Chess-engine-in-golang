@@ -36,16 +36,16 @@ go build -o Soomi.exe soomi.go
 go build -trimpath -ldflags "-s -w" -o Soomi.exe soomi.go
 
 # Disabling go bounds checking, perhaps 5% faster
-go build -trimpath -ldflags "-s -w" -gcflags "all=-B" -o Soomi-V1.1.3.exe soomi.go
+go build -trimpath -ldflags "-s -w" -gcflags "all=-B" -o Soomi.exe soomi.go
 ```
 
 ## Current Issues
 - Insufficient Material: The engine doesn't automatically detect insufficient material draws (like King vs King), so it might continue playing in drawn positions.
-- Move Generation: The move generator occasionally produces illegal pawn double pushes. These are correctly rejected by the legality check, so they don't affect gameplay, but it's a known quirk.
+- Move Generation: The move generator occasionally produces illegal pawn double pushes. These are correctly rejected by the legality check, so they don't affect gameplay, but it's a quirk.
 
 ## License
 Free to distribute and modify. Please credit the original author (Otto Laukkanen) if you use this code.
 
 ## Acknowledgments
 - Maksim Korzh for the mention on his BBC (BitBoard Chess) engine's GitHub page.
-- Chess Programming Wiki for the wealth of knowledge and algorithms.
+- Chess Programming Wiki for the good information.
