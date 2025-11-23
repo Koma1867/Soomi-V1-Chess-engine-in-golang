@@ -1,5 +1,11 @@
 # Soomi — Minimal Chess Engine (Go)
 
+<p align="center">
+  <img src="Soomi_logo.png" alt="Soomi Chess Engine Logo" width="1000">
+</p>
+
+<h1 align="center">Soomi Chess Engine</h1>
+
 -Soomi is a small, educational chess engine written in Go. It started as a learning project to understand core chess programming techniques like bitboards and search algorithms.
 
 -Despite this it is able to produce almost master level chess play, my estimations put it above 2000 elo.
