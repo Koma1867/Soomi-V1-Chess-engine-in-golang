@@ -14,7 +14,7 @@
 - Transposition Table to cache search results
 - Quiescence Search with Delta Pruning to resolve tactical sequences
 - Pruning techniques including Late Move Reductions (LMR), Null Move Pruning (NMP), Late Move Pruning (LMP), Razoring, and Mate Distance Pruning
-- Move ordering using Hash move, MVV-LVA (captures), and Killers
+- Move ordering using Hash move, MVV-LVA (captures), and Killers and piece square tables for quiet moves
 - Full UCI protocol support (compatible with Arena, Banksia, and other GUIs)
 - Simple time control management
 
