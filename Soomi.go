@@ -602,9 +602,12 @@ func (t *TranspositionTable) Probe(key uint64, minDepth int) (ttEntry, bool, boo
 func (t *TranspositionTable) Save(key uint64, mv Move, score int, depth int, flag uint8) {
 	depth = max(0, min(depth, 63))
 	score = max(min(score, 32767), -32768)
-	newPacked := packEntry(uint32(mv), int16(score), uint8(t.gen), uint8(depth), flag)
 	idx := int(key & t.mask)
 	old := t.entries[idx]
+	if mv == 0 && old.key == key {
+		mv = Move(uint32(old.packed >> 32))
+	}
+	newPacked := packEntry(uint32(mv), int16(score), uint8(t.gen), uint8(depth), flag)
 	if uint8(old.packed>>8) != uint8(t.gen) {
 		t.entries[idx] = ttEntry{key: key, packed: newPacked}
 		return
@@ -706,7 +709,6 @@ func initPST() {
 		-30, -40, -40, -50, -50, -40, -40, -30,
 	}
 
-	copy(pstEnd[:], pst[:])
 	pstEnd[White][Pawn] = [64]int{
 		0, 0, 0, 0, 0, 0, 0, 0,
 		4, 4, 4, 4, 4, 4, 4, 4,
@@ -1333,12 +1335,11 @@ func (p *Position) isLegal(m Move) bool {
 				if occAll&toBB != 0 {
 					return false
 				}
-				if d == step {
-				} else if d == 2*step {
+				if d == 2*step {
 					if from/8 != startRank || (occAll&sqBB[from+step]) != 0 {
 						return false
 					}
-				} else {
+				} else if d != step {
 					return false
 				}
 			}
@@ -2674,7 +2675,7 @@ func uciLoop() {
 	var cmdMutex sync.Mutex
 	scanner := bufio.NewScanner(os.Stdin)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1<<20)
-	fmt.Fprintln(os.Stderr, "# Soomi V1.1.4 ready. Type 'help' for available commands.")
+	fmt.Fprintln(os.Stderr, "# Soomi V1.1.5 ready. Type 'help' for available commands.")
 
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -2686,7 +2687,7 @@ func uciLoop() {
 
 		switch cmd {
 		case "uci":
-			fmt.Println("id name Soomi V1.1.4")
+			fmt.Println("id name Soomi V1.1.5")
 			fmt.Println("id author Otto Laukkanen")
 			fmt.Println("option name Hash type spin default 256 min 1 max 4096")
 			fmt.Println("uciok")
@@ -2910,7 +2911,7 @@ func uciLoop() {
 }
 
 func printHelp() {
-	fmt.Println(`# Soomi V1.1.4 - Available Commands:
+	fmt.Println(`# Soomi V1.1.5 - Available Commands:
 
 UCI Protocol Commands:
   uci                              - Initialize UCI mode
@@ -2955,11 +2956,11 @@ Example Usage:
 }
 
 func main() {
-	fmt.Fprintln(os.Stderr, "Soomi V1.1.4 - UCI Chess Engine")
+	fmt.Fprintln(os.Stderr, "Soomi V1.1.5 - UCI Chess Engine")
 	fmt.Fprintln(os.Stderr, "Type 'help' for available commands or 'uci' to enter UCI mode")
 	fmt.Fprintln(os.Stderr)
 	uciLoop()
 }
 
 // To make an executable
-// go build -trimpath -ldflags "-s -w" -gcflags "all=-B" -o Soomi-V1.1.4.exe soomi.go
+// go build -trimpath -ldflags "-s -w" -gcflags "all=-B" -o Soomi-V1.1.5.exe soomi.go
