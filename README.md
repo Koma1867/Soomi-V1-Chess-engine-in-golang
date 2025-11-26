@@ -6,7 +6,7 @@
 
 <h1 align="center">Soomi Chess Engine</h1>
 
--Soomi is a small, educational chess engine written in Go. It started as a learning project to understand core chess programming techniques like bitboards and search algorithms.
+-Soomi is a small chess engine written in Go. It started as a learning project to understand core chess programming techniques like bitboards and search algorithms.
 
 -Despite this it is able to produce almost master level chess play, my estimations put it above 2000 elo.
 
@@ -20,9 +20,9 @@
 - Transposition Table to cache search results
 - Quiescence Search with Delta Pruning to resolve tactical sequences
 - Pruning techniques including Late Move Reductions (LMR), Null Move Pruning (NMP), Late Move Pruning (LMP), Razoring, and Mate Distance Pruning
-- Move ordering using Hash move, MVV-LVA (captures), and Killers and piece square tables for quiet moves
-- Full UCI protocol support (compatible with Arena, Banksia, and other GUIs)
-- Simple time control management
+- Move ordering using Hash move, MVV-LVA (captures), and killers & piece square tables for quiet moves
+- Full UCI protocol support (compatible with Arena, others not tested)
+- Simple time management
 
 ## Limitations
 - No FEN parsing: Input/output is limited to UCI position commands.
