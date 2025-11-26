@@ -7,7 +7,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -31,7 +30,7 @@ const (
 	AspirationBase                     = 30
 	AspirationStep                     = 3
 	AspirationStartDepth               = 5
-	DefaultMovesToGo                   = 30
+	DefaultMovesToGo                   = 20
 	NodeCheckMaskSearch                = 1023
 	Razor2                             = 285
 	Razor1                             = 201
@@ -49,8 +48,8 @@ const (
 	scoreKiller1                       = 750000
 	scoreKiller2                       = 740000
 	scoreFallbackCapture               = 700000
-	minTimeMs            int64         = 10
-	perMoveCapDiv        int64         = 2
+	minTimeMs            int64         = 50
+	perMoveCapDiv        int64         = 3
 	nextIterMult                       = 2
 	continueMargin       time.Duration = 10 * time.Millisecond
 	MaxGamePly                         = 1024
@@ -2395,7 +2394,6 @@ func (p *Position) search(tc *TimeControl) Move {
 
 	var prevScore int
 	var havePrev bool
-	var stableBestMove Move
 	var pvBuf [MaxDepth]Move
 	for depth := 1; depth <= maxDepth; depth++ {
 
@@ -2453,10 +2451,6 @@ func (p *Position) search(tc *TimeControl) Move {
 			bestMove = pv[0]
 		}
 
-		if atomic.LoadInt32(&tc.stopped) == 0 && bestMove != 0 {
-			stableBestMove = bestMove
-		}
-
 		absScore := score
 		if absScore < 0 {
 			absScore = -absScore
@@ -2499,9 +2493,6 @@ func (p *Position) search(tc *TimeControl) Move {
 	if bestMove != 0 && p.isLegal(bestMove) {
 		return bestMove
 	}
-	if stableBestMove != 0 && p.isLegal(stableBestMove) {
-		return stableBestMove
-	}
 
 	fmt.Fprintln(os.Stderr, "# Warning: search could not find a legal move to play.")
 	return 0
@@ -2541,7 +2532,7 @@ func (tc *TimeControl) allocateTime(side int) {
 		fromBank = capBank
 	}
 
-	baseMs := min(fromBank+myInc/perMoveCapDiv, usableTime)
+	baseMs := min(fromBank+myInc, usableTime)
 	if baseMs < minTimeMs && usableTime > 0 {
 		baseMs = min(minTimeMs, usableTime)
 	}
@@ -2672,10 +2663,9 @@ func parseSetOption(parts []string) (name, value string) {
 
 func uciLoop() {
 	pos := NewPosition()
-	var cmdMutex sync.Mutex
 	scanner := bufio.NewScanner(os.Stdin)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1<<20)
-	fmt.Fprintln(os.Stderr, "# Soomi V1.1.5 ready. Type 'help' for available commands.")
+	fmt.Fprintln(os.Stderr, "# Soomi V1.1.6 ready. Type 'help' for available commands.")
 
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -2687,7 +2677,7 @@ func uciLoop() {
 
 		switch cmd {
 		case "uci":
-			fmt.Println("id name Soomi V1.1.5")
+			fmt.Println("id name Soomi V1.1.6")
 			fmt.Println("id author Otto Laukkanen")
 			fmt.Println("option name Hash type spin default 256 min 1 max 4096")
 			fmt.Println("uciok")
@@ -2710,9 +2700,7 @@ func uciLoop() {
 						continue
 					}
 				}
-				cmdMutex.Lock()
 				InitTT(sizeMB)
-				cmdMutex.Unlock()
 				fmt.Printf("info string Hash set to %d MB\n", sizeMB)
 			} else {
 				fmt.Printf("info string setoption %q = %q (ignored)\n", name, value)
@@ -2911,7 +2899,7 @@ func uciLoop() {
 }
 
 func printHelp() {
-	fmt.Println(`# Soomi V1.1.5 - Available Commands:
+	fmt.Println(`# Soomi V1.1.6 - Available Commands:
 
 UCI Protocol Commands:
   uci                              - Initialize UCI mode
@@ -2956,11 +2944,11 @@ Example Usage:
 }
 
 func main() {
-	fmt.Fprintln(os.Stderr, "Soomi V1.1.5 - UCI Chess Engine")
+	fmt.Fprintln(os.Stderr, "Soomi V1.1.6 - UCI Chess Engine")
 	fmt.Fprintln(os.Stderr, "Type 'help' for available commands or 'uci' to enter UCI mode")
 	fmt.Fprintln(os.Stderr)
 	uciLoop()
 }
 
 // To make an executable
-// go build -trimpath -ldflags "-s -w" -gcflags "all=-B" -o Soomi-V1.1.5.exe soomi.go
+// go build -trimpath -ldflags "-s -w" -gcflags "all=-B" -o Soomi-V1.1.6.exe soomi.go
