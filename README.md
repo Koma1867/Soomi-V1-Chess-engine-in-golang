@@ -19,7 +19,7 @@
 - Iterative Deepening with depth-based Aspiration Windows
 - Transposition Table to cache search results
 - Quiescence Search with Delta Pruning to resolve tactical sequences
-- Pruning techniques including Late Move Reductions (LMR), Null Move Pruning (NMP), Late Move Pruning (LMP), Razoring, and Mate Distance Pruning
+- Pruning techniques including Late Move Reductions (LMR), Null Move Pruning (NMP), Razoring, and Mate Distance Pruning
 - Move ordering using Hash move, MVV-LVA (captures), and killers & piece square tables for quiet moves
 - Full UCI protocol support (compatible with Arena, others not tested)
 - Simple time management
@@ -47,7 +47,6 @@ go build -trimpath -ldflags "-s -w" -gcflags "all=-B" -o Soomi.exe soomi.go
 
 ## Current Issues
 - Insufficient Material: The engine doesn't automatically detect insufficient material draws (like King vs King), so it might continue playing in drawn positions.
-- Move Generation: The move generator occasionally produces illegal pawn double pushes. These are correctly rejected by the legality check, so they don't affect gameplay, but it's a quirk.
 
 ## License
 Free to distribute and modify. Please credit the original author (Otto Laukkanen) if you use this code.
