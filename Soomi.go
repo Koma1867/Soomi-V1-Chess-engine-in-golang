@@ -1492,11 +1492,9 @@ func (p *Position) unmakeMove(m Move, undo Undo) {
 
 func (p *Position) makeNullMove() Undo {
 	undo := Undo{
-		hash:             p.hash,
-		castle:           p.castle,
-		epSquare:         p.epSquare,
-		halfmove:         p.halfmove,
-		lastIrreversible: p.lastIrreversible,
+		hash:     p.hash,
+		epSquare: p.epSquare,
+		halfmove: p.halfmove,
 	}
 
 	p.side ^= 1
@@ -1514,10 +1512,8 @@ func (p *Position) makeNullMove() Undo {
 
 func (p *Position) unmakeNullMove(undo Undo) {
 	p.hash = undo.hash
-	p.castle = undo.castle
 	p.epSquare = undo.epSquare
 	p.halfmove = undo.halfmove
-	p.lastIrreversible = undo.lastIrreversible
 	p.historyPly--
 	p.side ^= 1
 }
@@ -1965,10 +1961,6 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 				!pvNode && !isKiller
 			if canReduce {
 				red := 1 + (childDepth-LMRMinChildDepth)/10 + (moveNum-3)/6
-				if red < 1 {
-					red = 1
-				}
-
 				eff := childDepth - red
 				if eff < 1 {
 					if legalMoves > 1 && pvNode {
@@ -2336,7 +2328,6 @@ func parseSetOption(parts []string) (name, value string) {
 func uciLoop() {
 	pos := NewPosition()
 	scanner := bufio.NewScanner(os.Stdin)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1<<20)
 	fmt.Fprintln(os.Stderr, "# Soomi V1.1.7 ready. Type 'help' for available commands.")
 
 	for scanner.Scan() {
