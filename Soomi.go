@@ -1830,13 +1830,16 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 		}
 	}
 
+	inCheck := p.inCheck()
+	if inCheck {
+		depth++
+	}
+
 	if depth <= 0 {
 		return p.quiesce(alpha, beta, ply, tc)
 	}
 
-	inCheck := p.inCheck()
 	origAlpha := alpha
-
 	var hashMove Move
 	if e, found, usable := tt.Probe(p.hash, depth); found {
 		move, score, _, _, flag := e.unpack()
@@ -2143,23 +2146,14 @@ func (p *Position) search(tc *TimeControl) Move {
 		fmt.Println()
 
 		if absScore >= Mate-MateScoreGuard {
-			if bestMove != 0 && p.isLegal(bestMove) {
-				return bestMove
-			}
-			break
+			return bestMove
 		}
 
 		if tc.shouldStop() || !tc.shouldContinue(elapsed) {
 			break
 		}
 	}
-
-	if bestMove != 0 && p.isLegal(bestMove) {
-		return bestMove
-	}
-
-	fmt.Fprintln(os.Stderr, "# Warning: search could not find a legal move to play.")
-	return 0
+	return bestMove
 }
 
 func (tc *TimeControl) Stop() {
