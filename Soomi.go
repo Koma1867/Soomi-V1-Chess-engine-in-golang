@@ -26,14 +26,14 @@ const (
 	MaxDepth                           = 32
 	Infinity                           = 30000
 	Mate                               = 29000
-	AspirationBase                     = 30
-	AspirationStep                     = 3
-	AspirationStartDepth               = 5
+	AspirationBase                     = 50
+	AspirationStep                     = 2
+	AspirationStartDepth               = 4
 	DefaultMovesToGo                   = 30
 	NodeCheckMaskSearch                = 1023
-	Razor2                             = 285
-	Razor1                             = 201
-	DeltaMargin                        = 200
+	Razor2                             = 311
+	Razor1                             = 204
+	DeltaMargin                        = 218
 	LMRMinChildDepth                   = 3
 	LMRLateMoveAfter                   = 2
 	MateScoreGuard                     = 1000
@@ -74,29 +74,29 @@ const (
 )
 
 const (
-	KnightMobZeroPoint   = 4
-	KnightMobCpPerMove   = 3
-	BishopMobZeroPoint   = 7
+	KnightMobZeroPoint   = 3
+	KnightMobCpPerMove   = 2
+	BishopMobZeroPoint   = 6
 	BishopMobCpPerMove   = 2
-	RookMobZeroPoint     = 7
-	RookMobCpPerMove     = 2
-	QueenMobZeroPoint    = 14
+	RookMobZeroPoint     = 6
+	RookMobCpPerMove     = 1
+	QueenMobZeroPoint    = 12
 	QueenMobCpPerMove    = 1
-	EgMobCpPerMove       = 2
+	EgMobCpPerMove       = 1
 	KnightAttackWeight   = 2
 	BishopAttackWeight   = 2
 	RookAttackWeight     = 3
-	QueenAttackWeight    = 5
+	QueenAttackWeight    = 4
 	PhaseScale           = 256
 	MVVLVAWeight         = 100
-	MaxKingSafetyPenalty = 150
+	MaxKingSafetyPenalty = 100
 )
 
 var (
 	kingZoneMask      [2][64]Bitboard
-	passedPawnBonusMG = [8]int{0, 5, 12, 22, 36, 56, 84, 0}
-	passedPawnBonusEG = [8]int{0, 8, 20, 36, 62, 98, 154, 0}
-	pieceValues       = [6]int{100, 320, 330, 500, 950, 20000}
+	passedPawnBonusMG = [8]int{0, 3, 8, 12, 26, 36, 64, 0}
+	passedPawnBonusEG = [8]int{0, 5, 12, 23, 33, 45, 78, 0}
+	pieceValues       = [6]int{100, 300, 325, 500, 900, 20000}
 	pst               [2][6][64]int
 	pstEnd            [2][6][64]int
 	totalPhase        = piecePhase[Pawn]*16 + piecePhase[Knight]*4 + piecePhase[Bishop]*4 + piecePhase[Rook]*4 + piecePhase[Queen]*2
@@ -794,7 +794,7 @@ func abs(x int) int {
 }
 
 func nullMoveReduction(depth int) int {
-	return 3 + min(2, depth/6)
+	return 2 + min(2, depth/6)
 }
 
 func makeMoves(from, to, flags int) Move {
@@ -1570,7 +1570,7 @@ func (p *Position) calculateMobilityAndAttacks(side int) (mgScore, egScore int, 
 }
 
 func (p *Position) evaluateKingSafety(attackUnits int) int {
-	score := (attackUnits * attackUnits) / 4
+	score := (attackUnits * attackUnits) / 5
 	if score > MaxKingSafetyPenalty {
 		return -MaxKingSafetyPenalty
 	}
@@ -1953,7 +1953,7 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 				m != hashMove && moveNum > LMRLateMoveAfter &&
 				!pvNode && !isKiller
 			if canReduce {
-				red := 1 + (childDepth-LMRMinChildDepth)/10 + (moveNum-3)/6
+				red := 1 + (childDepth-LMRMinChildDepth)/8 + (moveNum-3)/6
 				eff := childDepth - red
 				if eff < 1 {
 					if legalMoves > 1 && pvNode {
