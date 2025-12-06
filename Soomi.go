@@ -1118,24 +1118,22 @@ func (p *Position) generateMovesTo(buf []Move, capturesOnly bool) int {
 func (p *Position) isLegal(m Move) bool {
 	from, to := m.from(), m.to()
 	us, them := p.side, p.side^1
-	val := p.square[from]
-	pt := val & 7
 	flags := m.flags()
-	fromBB, toBB := sqBB[from], sqBB[to]
-
 	if flags == FlagCastle {
 		if to > from {
-			if p.isAttacked(from, them) || p.isAttacked(from+1, them) || p.isAttacked(to, them) {
+			if p.isAttacked(from+1, them) || p.isAttacked(to, them) {
 				return false
 			}
 		} else {
-			if p.isAttacked(from, them) || p.isAttacked(from-1, them) || p.isAttacked(to, them) {
+			if p.isAttacked(from-1, them) || p.isAttacked(to, them) {
 				return false
 			}
 		}
-
+		return true
 	}
-
+	val := p.square[from]
+	pt := val & 7
+	fromBB, toBB := sqBB[from], sqBB[to]
 	theirP, theirN, theirB, theirR, theirQ, theirK := p.pieces[them][Pawn], p.pieces[them][Knight], p.pieces[them][Bishop], p.pieces[them][Rook], p.pieces[them][Queen], p.pieces[them][King]
 
 	if m.isCapture() {
@@ -1164,15 +1162,7 @@ func (p *Position) isLegal(m Move) bool {
 	}
 
 	occ2 := p.all&^fromBB | toBB
-	if flags == FlagCastle {
-		if to > from {
-			occ2 &^= sqBB[from+3]
-			occ2 |= sqBB[from+1]
-		} else {
-			occ2 &^= sqBB[from-4]
-			occ2 |= sqBB[from-1]
-		}
-	} else if flags == FlagEP {
+	if flags == FlagEP {
 		if us == White {
 			occ2 &^= sqBB[to-8]
 		} else {
