@@ -1133,7 +1133,7 @@ func (p *Position) isLegal(m Move) bool {
 	val := p.square[from]
 	pt := val & 7
 	fromBB, toBB := sqBB[from], sqBB[to]
-	theirP, theirN, theirB, theirR, theirQ := p.pieces[them][Pawn], p.pieces[them][Knight], p.pieces[them][Bishop], p.pieces[them][Rook], p.pieces[them][Queen]
+	theirP, theirN, theirB, theirR, theirQ, theirK := p.pieces[them][Pawn], p.pieces[them][Knight], p.pieces[them][Bishop], p.pieces[them][Rook], p.pieces[them][Queen], p.pieces[them][King]
 
 	if m.isCapture() {
 		capSq := to
@@ -1155,6 +1155,8 @@ func (p *Position) isLegal(m Move) bool {
 			theirR &^= capBB
 		} else if theirQ&capBB != 0 {
 			theirQ &^= capBB
+		} else if theirK&capBB != 0 {
+			return false
 		}
 	}
 
@@ -1183,6 +1185,9 @@ func (p *Position) isLegal(m Move) bool {
 		return false
 	}
 	if rookAttacks(kingSq, occ2)&(theirR|theirQ) != 0 {
+		return false
+	}
+	if kingAttacks[kingSq]&theirK != 0 {
 		return false
 	}
 	return true
