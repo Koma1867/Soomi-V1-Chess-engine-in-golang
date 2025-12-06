@@ -53,6 +53,7 @@ const (
 	ZobristSeed                        = 1070372
 	FileA                              = 0x0101010101010101
 	FileH                              = 0x8080808080808080
+	totalPhase                         = 24
 )
 
 const (
@@ -99,7 +100,6 @@ var (
 	pieceValues       = [6]int{100, 300, 325, 500, 900, 20000}
 	pst               [2][6][64]int
 	pstEnd            [2][6][64]int
-	totalPhase        = piecePhase[Pawn]*16 + piecePhase[Knight]*4 + piecePhase[Bishop]*4 + piecePhase[Rook]*4 + piecePhase[Queen]*2
 	piecePhase        = [6]int{0, 1, 1, 2, 4, 0}
 	currentTC         atomic.Pointer[TimeControl]
 	tt                *TranspositionTable
@@ -177,7 +177,6 @@ type Position struct {
 }
 
 type Undo struct {
-	hash             uint64
 	castle           int
 	epSquare         int
 	halfmove         int
@@ -1134,7 +1133,7 @@ func (p *Position) isLegal(m Move) bool {
 	val := p.square[from]
 	pt := val & 7
 	fromBB, toBB := sqBB[from], sqBB[to]
-	theirP, theirN, theirB, theirR, theirQ, theirK := p.pieces[them][Pawn], p.pieces[them][Knight], p.pieces[them][Bishop], p.pieces[them][Rook], p.pieces[them][Queen], p.pieces[them][King]
+	theirP, theirN, theirB, theirR, theirQ := p.pieces[them][Pawn], p.pieces[them][Knight], p.pieces[them][Bishop], p.pieces[them][Rook], p.pieces[them][Queen]
 
 	if m.isCapture() {
 		capSq := to
@@ -1156,8 +1155,6 @@ func (p *Position) isLegal(m Move) bool {
 			theirR &^= capBB
 		} else if theirQ&capBB != 0 {
 			theirQ &^= capBB
-		} else if theirK&capBB != 0 {
-			return false
 		}
 	}
 
@@ -1182,9 +1179,6 @@ func (p *Position) isLegal(m Move) bool {
 	if knightAttacks[kingSq]&theirN != 0 {
 		return false
 	}
-	if kingAttacks[kingSq]&theirK != 0 {
-		return false
-	}
 	if bishopAttacks(kingSq, occ2)&(theirB|theirQ) != 0 {
 		return false
 	}
@@ -1196,7 +1190,6 @@ func (p *Position) isLegal(m Move) bool {
 
 func (p *Position) makeMove(m Move) Undo {
 	undo := Undo{
-		hash:             p.hash,
 		castle:           p.castle,
 		epSquare:         p.epSquare,
 		halfmove:         p.halfmove,
@@ -1477,12 +1470,11 @@ func (p *Position) unmakeMove(m Move, undo Undo) {
 		p.psqScoreEG[them] += pstEnd[them][undo.captured][capSq]
 		p.square[capSq] = (them << 3) | undo.captured
 	}
-	p.hash = undo.hash
+	p.hash = p.historyKeys[p.historyPly]
 }
 
 func (p *Position) makeNullMove() Undo {
 	undo := Undo{
-		hash:     p.hash,
 		epSquare: p.epSquare,
 		halfmove: p.halfmove,
 	}
@@ -1501,10 +1493,10 @@ func (p *Position) makeNullMove() Undo {
 }
 
 func (p *Position) unmakeNullMove(undo Undo) {
-	p.hash = undo.hash
+	p.historyPly--
+	p.hash = p.historyKeys[p.historyPly]
 	p.epSquare = undo.epSquare
 	p.halfmove = undo.halfmove
-	p.historyPly--
 	p.side ^= 1
 }
 
@@ -1803,8 +1795,7 @@ func (p *Position) quiesce(alpha, beta, ply int, tc *TimeControl) int {
 	}
 
 	if inCheck && legalCount == 0 {
-		score := -Mate + ply
-		return score
+		return -Mate + ply
 	}
 
 	return best
@@ -1956,14 +1947,7 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 				red := 1 + (childDepth-LMRMinChildDepth)/8 + (moveNum-3)/6
 				eff := childDepth - red
 				if eff < 1 {
-					if legalMoves > 1 && pvNode {
-						score = -p.negamax(childDepth, -alpha-1, -alpha, ply+1, nil, tc, ss)
-						if score > alpha {
-							score = -p.negamax(childDepth, -beta, -alpha, ply+1, pvPtr, tc, ss)
-						}
-					} else {
-						score = -p.negamax(childDepth, -beta, -alpha, ply+1, pvPtr, tc, ss)
-					}
+					score = -p.negamax(childDepth, -beta, -alpha, ply+1, nil, tc, ss)
 				} else {
 					score = -p.negamax(eff, -alpha-1, -alpha, ply+1, nil, tc, ss)
 					if score > alpha {
@@ -2017,8 +2001,7 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 
 	if legalMoves == 0 {
 		if inCheck {
-			score := -Mate + ply
-			return score
+			return -Mate + ply
 		}
 		return 0
 	}
@@ -2108,10 +2091,7 @@ func (p *Position) search(tc *TimeControl) Move {
 			bestMove = pv[0]
 		}
 
-		absScore := score
-		if absScore < 0 {
-			absScore = -absScore
-		}
+		absScore := abs(score)
 
 		if absScore >= Mate-MateScoreGuard {
 			matePly := Mate - absScore
@@ -2208,9 +2188,6 @@ func (tc *TimeControl) shouldContinue(lastIter time.Duration) bool {
 		return true
 	}
 
-	if tc.deadline.IsZero() {
-		return true
-	}
 	remain := time.Until(tc.deadline)
 	if remain <= 0 {
 		return false
