@@ -18,6 +18,7 @@
 - Principal Variation Search (PVS) for improved search efficiency
 - Iterative Deepening with depth-based Aspiration Windows
 - Transposition Table to cache search results
+- Check extensions
 - Quiescence Search with Delta Pruning to resolve tactical sequences
 - Pruning techniques including Late Move Reductions (LMR), Null Move Pruning (NMP), Razoring, and Mate Distance Pruning
 - Move ordering using Hash move, MVV-LVA (captures), and killers & piece square tables for quiet moves
