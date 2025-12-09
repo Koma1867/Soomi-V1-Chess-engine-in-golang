@@ -1945,8 +1945,7 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 			isKiller := m == k.killer1 || m == k.killer2
 			canReduce := childDepth >= LMRMinChildDepth &&
 				!inCheck && !gaveCheck &&
-				!m.isCapture() && !m.isPromo() &&
-				m != hashMove && moveNum > LMRLateMoveAfter &&
+				!m.isCapture() && !m.isPromo() && moveNum > LMRLateMoveAfter &&
 				!pvNode && !isKiller
 			if canReduce {
 				red := 1 + (childDepth-LMRMinChildDepth)/8 + (moveNum-3)/6
