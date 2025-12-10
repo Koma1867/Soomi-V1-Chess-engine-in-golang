@@ -532,9 +532,6 @@ func (t *TranspositionTable) Save(key uint64, mv Move, score int, depth int, fla
 	score = max(min(score, 32767), -32768)
 	idx := int(key & t.mask)
 	old := t.entries[idx]
-	if mv == 0 && old.key == key {
-		mv = Move(uint32(old.packed >> 32))
-	}
 	newPacked := packEntry(uint32(mv), int16(score), uint8(t.gen), uint8(depth), flag)
 	if uint8(old.packed>>8) != uint8(t.gen) {
 		t.entries[idx] = ttEntry{key: key, packed: newPacked}
