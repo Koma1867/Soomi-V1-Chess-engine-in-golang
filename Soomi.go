@@ -2453,7 +2453,7 @@ func uciLoop() {
 					sq := r*8 + f
 					c, pt, ok := pos.pieceAt(sq)
 					if ok {
-						piece := ".PNBRQK"[pt+1]
+						piece := "PNBRQK"[pt]
 						if c == Black {
 							piece += 32
 						}
