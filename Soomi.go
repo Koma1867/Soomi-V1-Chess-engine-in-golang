@@ -528,7 +528,7 @@ func (t *TranspositionTable) Probe(key uint64, minDepth int) (ttEntry, bool, boo
 }
 
 func (t *TranspositionTable) Save(key uint64, mv Move, score int, depth int, flag uint8) {
-	depth = max(0, min(depth, 63))
+	depth = min(depth, 63)
 	score = max(min(score, 32767), -32768)
 	idx := int(key & t.mask)
 	old := t.entries[idx]
