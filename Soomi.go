@@ -231,11 +231,9 @@ func initKingZoneMasks() {
 		r := sq / 8
 
 		whiteZone := baseZone
-		if r < 6 {
-			whiteZone |= sqBB[sq+8]
-			if r < 5 {
-				whiteZone |= sqBB[sq+16]
-			}
+		if r < 5 {
+			whiteZone |= sqBB[sq+16]
+
 			if r < 4 {
 				whiteZone |= sqBB[sq+24]
 			}
@@ -243,11 +241,9 @@ func initKingZoneMasks() {
 		kingZoneMask[White][sq] = whiteZone
 
 		blackZone := baseZone
-		if r > 1 {
-			blackZone |= sqBB[sq-8]
-			if r > 2 {
-				blackZone |= sqBB[sq-16]
-			}
+
+		if r > 2 {
+			blackZone |= sqBB[sq-16]
 			if r > 3 {
 				blackZone |= sqBB[sq-24]
 			}
