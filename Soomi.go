@@ -1155,8 +1155,6 @@ func (p *Position) isLegal(m Move) bool {
 			theirR &^= capBB
 		} else if theirQ&capBB != 0 {
 			theirQ &^= capBB
-		} else if theirK&capBB != 0 {
-			return false
 		}
 	}
 
