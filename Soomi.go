@@ -2020,15 +2020,12 @@ func (p *Position) search(tc *TimeControl) Move {
 	var bestMove Move
 	var ss [MaxDepth + 100]SearchStack
 
-	atomic.StoreInt32(&tc.stopped, 0)
-
 	maxDepth := tc.depth
 	if maxDepth == 0 || tc.infinite {
 		maxDepth = MaxDepth
 	}
 
 	var prevScore int
-	var havePrev bool
 	var pvBuf [MaxDepth]Move
 	for depth := 1; depth <= maxDepth; depth++ {
 
@@ -2040,7 +2037,7 @@ func (p *Position) search(tc *TimeControl) Move {
 		var score int
 
 		needFull := false
-		if depth >= AspirationStartDepth && havePrev {
+		if depth >= AspirationStartDepth {
 			base := prevScore
 
 			if abs(base) >= MateLikeThreshold {
@@ -2066,7 +2063,6 @@ func (p *Position) search(tc *TimeControl) Move {
 
 		if !tc.shouldStop() {
 			prevScore = score
-			havePrev = true
 		}
 
 		iterNodes := p.localNodes
@@ -2239,11 +2235,7 @@ func runSearchAndReport(p *Position, tc *TimeControl) {
 	if !currentTC.CompareAndSwap(tc, nil) {
 		return
 	}
-	if move == 0 {
-		fmt.Println("bestmove 0000")
-	} else {
-		fmt.Println("bestmove", move)
-	}
+	fmt.Println("bestmove", move)
 }
 
 func parseSetOption(parts []string) (name, value string) {
@@ -2348,12 +2340,11 @@ func uciLoop() {
 				}
 			}
 
+			pos.setStartPos()
 			if parts[1] != "startpos" {
 				fmt.Println("info string only 'position startpos [moves ...]' is supported; resetting to startpos")
-				pos.setStartPos()
 				break
 			}
-			pos.setStartPos()
 
 			if moveIdx != -1 && moveIdx+1 < len(parts) {
 				for _, mvStr := range parts[moveIdx+1:] {
