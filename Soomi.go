@@ -31,8 +31,6 @@ const (
 	AspirationStartDepth               = 4
 	DefaultMovesToGo                   = 30
 	NodeCheckMaskSearch                = 1023
-	Razor2                             = 311
-	Razor1                             = 204
 	DeltaMargin                        = 218
 	LMRMinChildDepth                   = 3
 	LMRLateMoveAfter                   = 2
@@ -1856,23 +1854,6 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 			return -Mate + ply
 		}
 		alpha = -Mate + ply
-	}
-
-	if depth <= 2 && pv == nil && !inCheck && hashMove == 0 && alpha > -Mate+MateScoreGuard && alpha < Mate-MateScoreGuard {
-		eval := p.evaluate()
-		if depth == 2 {
-			if eval <= alpha-Razor2 {
-				if v := p.negamax(depth-1, alpha-1, alpha, ply+1, nil, tc, ss); v < alpha {
-					return v
-				}
-			}
-		} else {
-			if eval <= alpha-Razor1 {
-				if v := p.quiesce(alpha-1, alpha, ply+1, tc); v < alpha {
-					return v
-				}
-			}
-		}
 	}
 
 	if depth >= 3 && !inCheck && !p.isEndgame() && pv == nil {
