@@ -38,7 +38,6 @@ const (
 	LMRLateMoveAfter                   = 2
 	MateScoreGuard                     = 1000
 	MateLikeThreshold                  = Mate - MateScoreGuard
-	EndgameThreshold                   = 4
 	defaultTTSizeMB                    = 256
 	scoreHash                          = 1000000
 	scorePromoBase                     = 900000
@@ -217,11 +216,7 @@ func (p *Position) computePhase() int {
 
 func (p *Position) isEndgame() bool {
 	phase := p.computePhase()
-	return phase < totalPhase/EndgameThreshold
-}
-
-func phaseScale(ph int) int {
-	return ((totalPhase-ph)*PhaseScale + totalPhase/2) / totalPhase
+	return phase > 18
 }
 
 func initKingZoneMasks() {
@@ -768,10 +763,6 @@ func initAttacks() {
 	}
 }
 
-func mvvLvaScore(att, vic int) int {
-	return pieceValues[vic]*MVVLVAWeight - pieceValues[att]
-}
-
 func popLSB(b *Bitboard) int {
 	idx := bits.TrailingZeros64(uint64(*b))
 	*b &= *b - 1
@@ -1218,13 +1209,14 @@ func (p *Position) makeMove(m Move) Undo {
 		undo.captured = capturedPiece
 
 		if capturedPiece == Rook {
-			if capSq == 0 {
+			switch capSq {
+			case 0:
 				p.castle &^= 2
-			} else if capSq == 7 {
+			case 7:
 				p.castle &^= 1
-			} else if capSq == 56 {
+			case 56:
 				p.castle &^= 8
-			} else if capSq == 63 {
+			case 63:
 				p.castle &^= 4
 			}
 		}
@@ -1638,7 +1630,7 @@ func (p *Position) evaluate() int {
 	eg := a + c + mobilityEG + passedEG
 
 	ph := p.computePhase()
-	phaseScaled := phaseScale(ph)
+	phaseScaled := ((totalPhase-ph)*PhaseScale + totalPhase/2) / totalPhase
 	score := eg + ((mg-eg)*phaseScaled)/PhaseScale
 
 	if p.side == Black {
@@ -1684,7 +1676,7 @@ func (p *Position) orderMoves(moves []Move, bestMove, killer1, killer2 Move) []M
 				vVal := p.square[capSq]
 				attacker := attVal & 7
 				victim := vVal & 7
-				score = scoreCaptureBase + mvvLvaScore(attacker, victim)
+				score = scoreCaptureBase + pieceValues[victim]*MVVLVAWeight - pieceValues[attacker]
 			} else {
 				switch m {
 				case killer1:
@@ -2276,7 +2268,7 @@ func parseSetOption(parts []string) (name, value string) {
 func uciLoop() {
 	pos := NewPosition()
 	scanner := bufio.NewScanner(os.Stdin)
-	fmt.Fprintln(os.Stderr, "# Soomi V1.1.7 ready. Type 'help' for available commands.")
+	fmt.Fprintln(os.Stderr, "# Soomi V1.1.8 ready. Type 'help' for available commands.")
 
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -2288,7 +2280,7 @@ func uciLoop() {
 
 		switch cmd {
 		case "uci":
-			fmt.Println("id name Soomi V1.1.7")
+			fmt.Println("id name Soomi V1.1.8")
 			fmt.Println("id author Otto Laukkanen")
 			fmt.Println("option name Hash type spin default 256 min 1 max 4096")
 			fmt.Println("uciok")
@@ -2509,7 +2501,7 @@ func uciLoop() {
 }
 
 func printHelp() {
-	fmt.Println(`# Soomi V1.1.7 - Available Commands:
+	fmt.Println(`# Soomi V1.1.8 - Available Commands:
 
 UCI Protocol Commands:
   uci                              - Initialize UCI mode
@@ -2554,11 +2546,11 @@ Example Usage:
 }
 
 func main() {
-	fmt.Fprintln(os.Stderr, "Soomi V1.1.7 - UCI Chess Engine")
+	fmt.Fprintln(os.Stderr, "Soomi V1.1.8 - UCI Chess Engine")
 	fmt.Fprintln(os.Stderr, "Type 'help' for available commands or 'uci' to enter UCI mode")
 	fmt.Fprintln(os.Stderr)
 	uciLoop()
 }
 
 // To make an executable
-// go build -trimpath -ldflags "-s -w" -gcflags "all=-B" -o Soomi-V1.1.7.exe soomi.go
+// go build -trimpath -ldflags "-s -w" -gcflags "all=-B" -o Soomi-V1.1.8.exe soomi.go
