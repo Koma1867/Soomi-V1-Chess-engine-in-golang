@@ -13,14 +13,14 @@
 ## Features
 - Bitboard move generation using Magic Bitboards
 - Evaluation based on material, piece-square tables, mobility, passed pawns, and king safety
-- Tapered evaluation to smoothly blend middlegame and endgame scores
+- Tapered evaluation
 - Negamax search with Alpha-Beta pruning
-- Principal Variation Search (PVS) for improved search efficiency
+- Principal Variation Search (PVS)
 - Iterative Deepening with depth-based Aspiration Windows
-- Transposition Table to cache search results
+- Transposition Table
 - Check extensions
-- Quiescence Search with Delta Pruning to resolve tactical sequences
-- Pruning techniques including Late Move Reductions (LMR), Null Move Pruning (NMP), Razoring, and Mate Distance Pruning
+- Quiescence Search with Delta Pruning
+- Pruning techniques including Late Move Reductions (LMR), Null Move Pruning (NMP), and Mate Distance Pruning
 - Move ordering using Hash move, MVV-LVA (captures), and killers & piece square tables for quiet moves
 - Full UCI protocol support (compatible with Arena, others not tested)
 - Simple time management
@@ -28,7 +28,7 @@
 ## Limitations
 - No FEN parsing: Input/output is limited to UCI position commands.
 - Single-threaded: The engine runs on a single core and does not support pondering.
-- Hand-tuned Evaluation: The evaluation terms are manually tuned rather than using automated tuning methods like SPSA.
+- Hand-tuned Evaluation: The evaluation terms are manually tuned rather than using automated tuning methods like SPSA, basically taken "from the hat"
 
 ## Build & Run
 Install Go (1.20+ recommended): https://go.dev/doc/install
