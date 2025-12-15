@@ -77,7 +77,7 @@ const (
 	BishopMobZeroPoint   = 6
 	BishopMobCpPerMove   = 2
 	RookMobZeroPoint     = 6
-	RookMobCpPerMove     = 1
+	RookMobCpPerMove     = 2
 	QueenMobZeroPoint    = 12
 	QueenMobCpPerMove    = 1
 	EgMobCpPerMove       = 1
@@ -87,13 +87,13 @@ const (
 	QueenAttackWeight    = 4
 	PhaseScale           = 256
 	MVVLVAWeight         = 100
-	MaxKingSafetyPenalty = 100
+	MaxKingSafetyPenalty = 300
 )
 
 var (
 	kingZoneMask      [2][64]Bitboard
-	passedPawnBonusMG = [8]int{0, 3, 8, 12, 26, 36, 64, 0}
-	passedPawnBonusEG = [8]int{0, 5, 12, 23, 33, 45, 78, 0}
+	passedPawnBonusMG = [8]int{0, 5, 10, 20, 35, 60, 100, 0}
+	passedPawnBonusEG = [8]int{0, 10, 20, 40, 70, 140, 260, 0}
 	pieceValues       = [6]int{100, 300, 325, 500, 900, 20000}
 	pst               [2][6][64]int
 	pstEnd            [2][6][64]int
@@ -772,10 +772,6 @@ func abs(x int) int {
 		return -x
 	}
 	return x
-}
-
-func nullMoveReduction(depth int) int {
-	return 2 + min(2, depth/6)
 }
 
 func makeMoves(from, to, flags int) Move {
@@ -1857,7 +1853,7 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 	}
 
 	if depth >= 3 && !inCheck && !p.isEndgame() && pv == nil {
-		R := nullMoveReduction(depth)
+		R := 2
 
 		undo := p.makeNullMove()
 		score := -p.negamax(depth-1-R, -beta, -beta+1, ply+1, nil, tc, ss)
@@ -1912,7 +1908,7 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 				!m.isCapture() && !m.isPromo() && moveNum > LMRLateMoveAfter &&
 				!pvNode && !isKiller
 			if canReduce {
-				red := 1 + (childDepth-LMRMinChildDepth)/8 + (moveNum-3)/6
+				red := 1 + (childDepth-LMRMinChildDepth)/4 + (moveNum-3)/6
 				eff := childDepth - red
 				if eff < 1 {
 					score = -p.negamax(childDepth, -beta, -alpha, ply+1, nil, tc, ss)
