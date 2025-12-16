@@ -26,14 +26,14 @@ const (
 	MaxDepth                           = 32
 	Infinity                           = 30000
 	Mate                               = 29000
-	AspirationBase                     = 50
-	AspirationStep                     = 2
+	AspirationBase                     = 30
+	AspirationStep                     = 1
 	AspirationStartDepth               = 4
 	DefaultMovesToGo                   = 30
 	NodeCheckMaskSearch                = 1023
-	DeltaMargin                        = 218
+	DeltaMargin                        = 150
 	LMRMinChildDepth                   = 3
-	LMRLateMoveAfter                   = 4
+	LMRLateMoveAfter                   = 6
 	MateScoreGuard                     = 1000
 	MateLikeThreshold                  = Mate - MateScoreGuard
 	defaultTTSizeMB                    = 256
@@ -42,7 +42,7 @@ const (
 	scoreCaptureBase                   = 800000
 	scoreKiller1                       = 750000
 	scoreKiller2                       = 740000
-	minTimeMs            int64         = 50
+	minTimeMs            int64         = 5
 	perMoveCapDiv        int64         = 3
 	nextIterMult                       = 2
 	continueMargin       time.Duration = 10 * time.Millisecond
@@ -72,19 +72,19 @@ const (
 )
 
 const (
-	KnightMobZeroPoint   = 3
-	KnightMobCpPerMove   = 2
-	BishopMobZeroPoint   = 6
-	BishopMobCpPerMove   = 2
-	RookMobZeroPoint     = 6
-	RookMobCpPerMove     = 2
-	QueenMobZeroPoint    = 12
+	KnightMobZeroPoint   = 2
+	KnightMobCpPerMove   = 4
+	BishopMobZeroPoint   = 3
+	BishopMobCpPerMove   = 4
+	RookMobZeroPoint     = 3
+	RookMobCpPerMove     = 5
+	QueenMobZeroPoint    = 10
 	QueenMobCpPerMove    = 1
 	EgMobCpPerMove       = 1
-	KnightAttackWeight   = 2
-	BishopAttackWeight   = 2
-	RookAttackWeight     = 3
-	QueenAttackWeight    = 4
+	KnightAttackWeight   = 8
+	BishopAttackWeight   = 4
+	RookAttackWeight     = 5
+	QueenAttackWeight    = 6
 	PhaseScale           = 256
 	MVVLVAWeight         = 100
 	MaxKingSafetyPenalty = 300
@@ -425,9 +425,6 @@ var (
 )
 
 func (p *Position) isRepetition() bool {
-	if p.historyPly-p.lastIrreversible < 2 {
-		return false
-	}
 	target := p.hash
 	for i := p.historyPly - 2; i >= p.lastIrreversible; i -= 2 {
 		if p.historyKeys[i] == target {
@@ -1853,7 +1850,7 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 	}
 
 	if depth >= 3 && !inCheck && !p.isEndgame() && pv == nil {
-		R := 2
+		R := 3
 
 		undo := p.makeNullMove()
 		score := -p.negamax(depth-1-R, -beta, -beta+1, ply+1, nil, tc, ss)
@@ -1908,7 +1905,7 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 				!m.isCapture() && !m.isPromo() && moveNum > LMRLateMoveAfter &&
 				!pvNode && !isKiller
 			if canReduce {
-				red := 1 + (childDepth-LMRMinChildDepth)/4 + (moveNum-3)/10
+				red := 1 + (childDepth-LMRMinChildDepth)/6 + (moveNum-3)/6
 				eff := childDepth - red
 				if eff < 1 {
 					score = -p.negamax(childDepth, -beta, -alpha, ply+1, nil, tc, ss)
