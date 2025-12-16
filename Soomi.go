@@ -33,7 +33,7 @@ const (
 	NodeCheckMaskSearch                = 1023
 	DeltaMargin                        = 218
 	LMRMinChildDepth                   = 3
-	LMRLateMoveAfter                   = 2
+	LMRLateMoveAfter                   = 4
 	MateScoreGuard                     = 1000
 	MateLikeThreshold                  = Mate - MateScoreGuard
 	defaultTTSizeMB                    = 256
@@ -1908,7 +1908,7 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 				!m.isCapture() && !m.isPromo() && moveNum > LMRLateMoveAfter &&
 				!pvNode && !isKiller
 			if canReduce {
-				red := 1 + (childDepth-LMRMinChildDepth)/4 + (moveNum-3)/6
+				red := 1 + (childDepth-LMRMinChildDepth)/4 + (moveNum-3)/10
 				eff := childDepth - red
 				if eff < 1 {
 					score = -p.negamax(childDepth, -beta, -alpha, ply+1, nil, tc, ss)
