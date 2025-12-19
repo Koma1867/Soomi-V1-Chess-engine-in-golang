@@ -471,9 +471,6 @@ func InitTT(sizeMB int) {
 	entrySize := uint64(16)
 	totalBytes := uint64(sizeMB) * 1024 * 1024
 	entries := totalBytes / entrySize
-	if entries < 1 {
-		entries = 1
-	}
 	size := uint64(1)
 	for size<<1 <= entries {
 		size <<= 1
@@ -1105,8 +1102,7 @@ func (p *Position) isLegal(m Move) bool {
 		}
 		return true
 	}
-	val := p.square[from]
-	pt := val & 7
+	pt := p.square[from] & 7
 	fromBB, toBB := sqBB[from], sqBB[to]
 	theirP, theirN, theirB, theirR, theirQ, theirK := p.pieces[them][Pawn], p.pieces[them][Knight], p.pieces[them][Bishop], p.pieces[them][Rook], p.pieces[them][Queen], p.pieces[them][King]
 
@@ -1644,15 +1640,12 @@ func (p *Position) orderMoves(moves []Move, bestMove, killer1, killer2 Move) []M
 	for i := 0; i < n; i++ {
 		m := moves[i]
 		score := 0
-
 		if m == bestMove {
 			score = scoreHash
 		} else {
-			isPromo := m.isPromo()
-			isCapture := m.isCapture()
-			if isPromo {
+			if m.isPromo() {
 				score = scorePromoBase + pieceValues[m.promoType()]
-			} else if isCapture {
+			} else if m.isCapture() {
 				from := m.from()
 				to := m.to()
 				capSq := to
@@ -1663,10 +1656,8 @@ func (p *Position) orderMoves(moves []Move, bestMove, killer1, killer2 Move) []M
 						capSq = to + 8
 					}
 				}
-				attVal := p.square[from]
-				vVal := p.square[capSq]
-				attacker := attVal & 7
-				victim := vVal & 7
+				attacker := p.square[from] & 7
+				victim := p.square[capSq] & 7
 				score = scoreCaptureBase + pieceValues[victim]*MVVLVAWeight - pieceValues[attacker]
 			} else {
 				switch m {
@@ -1813,9 +1804,6 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 					scoreFromTT -= ply
 				} else {
 					scoreFromTT += ply
-				}
-				if flag != ttFlagExact {
-					usable = false
 				}
 			}
 
