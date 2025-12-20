@@ -1121,7 +1121,7 @@ func (p *Position) isLegal(m Move) bool {
 			theirB &^= capBB
 		} else if theirR&capBB != 0 {
 			theirR &^= capBB
-		} else if theirQ&capBB != 0 {
+		} else {
 			theirQ &^= capBB
 		}
 	}
@@ -1845,11 +1845,7 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 	bestMove := Move(0)
 	bestScore := -Infinity
 	legalMoves := 0
-	moveNum := 0
 
-	if pv != nil {
-		*pv = (*pv)[:0]
-	}
 	pvNode := pv != nil
 	var pvPtr *[]Move
 
@@ -1863,7 +1859,6 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 			continue
 		}
 		legalMoves++
-		moveNum++
 		undo := p.makeMove(m)
 		childPV := childPVBuf[:0]
 		if pvNode {
@@ -1873,16 +1868,15 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 		if p.isDraw() {
 			score = 0
 		} else {
-			gaveCheck := p.inCheck()
 			childDepth := depth - 1
 			k := &ss[ply]
 			isKiller := m == k.killer1 || m == k.killer2
 			canReduce := childDepth >= LMRMinChildDepth &&
-				!inCheck && !gaveCheck &&
-				!m.isCapture() && !m.isPromo() && moveNum > LMRLateMoveAfter &&
+				!inCheck &&
+				!m.isCapture() && !m.isPromo() && legalMoves > LMRLateMoveAfter &&
 				!pvNode && !isKiller
 			if canReduce {
-				red := 1 + (childDepth-LMRMinChildDepth)/6 + (moveNum-3)/6
+				red := 1 + (childDepth-LMRMinChildDepth)/6 + (legalMoves-3)/6
 				eff := childDepth - red
 				if eff < 1 {
 					score = -p.negamax(childDepth, -beta, -alpha, ply+1, nil, tc, ss)
@@ -1907,7 +1901,7 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 		p.unmakeMove(m, undo)
 
 		if score >= beta {
-			if !inCheck && !m.isCapture() && !m.isPromo() && m != hashMove {
+			if !m.isCapture() && !m.isPromo() && m != hashMove {
 				k := &ss[ply]
 				if m != k.killer1 {
 					k.killer2, k.killer1 = k.killer1, m
@@ -1982,19 +1976,12 @@ func (p *Position) search(tc *TimeControl) Move {
 		needFull := false
 		if depth >= AspirationStartDepth {
 			base := prevScore
-
-			if abs(base) >= MateLikeThreshold {
+			window := AspirationBase + depth*AspirationStep
+			low := base - window
+			high := base + window
+			score = p.negamax(depth, low, high, 0, &pv, tc, &ss)
+			if score <= low || score >= high {
 				needFull = true
-			} else {
-
-				window := AspirationBase + depth*AspirationStep
-				low := base - window
-				high := base + window
-
-				score = p.negamax(depth, low, high, 0, &pv, tc, &ss)
-				if score <= low || score >= high {
-					needFull = true
-				}
 			}
 		} else {
 			needFull = true
@@ -2050,7 +2037,7 @@ func (p *Position) search(tc *TimeControl) Move {
 			return bestMove
 		}
 
-		if tc.shouldStop() || !tc.shouldContinue(elapsed) {
+		if !tc.shouldContinue(elapsed) {
 			break
 		}
 	}
