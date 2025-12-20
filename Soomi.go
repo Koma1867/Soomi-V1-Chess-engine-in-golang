@@ -1724,14 +1724,8 @@ func (p *Position) quiesce(alpha, beta, ply int, tc *TimeControl) int {
 	}
 
 	var movesArr [256]Move
-	var moves []Move
-	if inCheck {
-		n := p.generateMovesTo(movesArr[:], false)
-		moves = movesArr[:n]
-	} else {
-		n := p.generateMovesTo(movesArr[:], true)
-		moves = movesArr[:n]
-	}
+	n := p.generateMovesTo(movesArr[:], !inCheck)
+	moves := movesArr[:n]
 	moves = p.orderMoves(moves, 0, 0, 0)
 
 	legalCount := 0
