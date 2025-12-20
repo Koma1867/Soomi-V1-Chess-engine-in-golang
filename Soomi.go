@@ -877,8 +877,7 @@ func bishopAttacks(sq int, occ Bitboard) Bitboard {
 }
 
 func (p *Position) isAttacked(sq, bySide int) bool {
-	pawns := p.pieces[bySide][Pawn]
-	if pawnAttacks[bySide^1][sq]&pawns != 0 {
+	if pawnAttacks[bySide^1][sq]&p.pieces[bySide][Pawn] != 0 {
 		return true
 	}
 	if knightAttacks[sq]&p.pieces[bySide][Knight] != 0 {
@@ -887,13 +886,11 @@ func (p *Position) isAttacked(sq, bySide int) bool {
 	if kingAttacks[sq]&p.pieces[bySide][King] != 0 {
 		return true
 	}
-	bish := p.pieces[bySide][Bishop]
 	qu := p.pieces[bySide][Queen]
-	if bishopAttacks(sq, p.all)&(bish|qu) != 0 {
+	if bishopAttacks(sq, p.all)&(p.pieces[bySide][Bishop]|qu) != 0 {
 		return true
 	}
-	rook := p.pieces[bySide][Rook]
-	return rookAttacks(sq, p.all)&(rook|qu) != 0
+	return rookAttacks(sq, p.all)&(p.pieces[bySide][Rook]|qu) != 0
 }
 
 func (p *Position) inCheck() bool {
@@ -1635,8 +1632,6 @@ func (p *Position) orderMoves(moves []Move, bestMove, killer1, killer2 Move) []M
 	var stackScores [256]int
 	scores := stackScores[:n]
 
-	side := p.side
-
 	for i := 0; i < n; i++ {
 		m := moves[i]
 		score := 0
@@ -1650,7 +1645,7 @@ func (p *Position) orderMoves(moves []Move, bestMove, killer1, killer2 Move) []M
 				to := m.to()
 				capSq := to
 				if m.flags() == FlagEP {
-					if side == White {
+					if p.side == White {
 						capSq = to - 8
 					} else {
 						capSq = to + 8
@@ -1667,7 +1662,7 @@ func (p *Position) orderMoves(moves []Move, bestMove, killer1, killer2 Move) []M
 					score = scoreKiller2
 				default:
 					piece := p.square[m.from()] & 7
-					score = pst[side][piece][m.to()] - pst[side][piece][m.from()]
+					score = pst[p.side][piece][m.to()] - pst[p.side][piece][m.from()]
 				}
 			}
 		}
@@ -2041,9 +2036,6 @@ func (p *Position) search(tc *TimeControl) Move {
 		if absScore >= Mate-MateScoreGuard {
 			matePly := Mate - absScore
 			mateMoves := (matePly + 1) / 2
-			if mateMoves < 1 {
-				mateMoves = 1
-			}
 			if score > 0 {
 				fmt.Printf("info depth %d score mate %d nodes %d time %d nps %d pv",
 					depth, mateMoves, iterNodes, elapsedMs, nps)
