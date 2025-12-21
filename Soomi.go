@@ -35,7 +35,6 @@ const (
 	LMRMinChildDepth                   = 3
 	LMRLateMoveAfter                   = 6
 	MateScoreGuard                     = 1000
-	MateLikeThreshold                  = Mate - MateScoreGuard
 	defaultTTSizeMB                    = 256
 	scoreHash                          = 1000000
 	scorePromoBase                     = 900000
@@ -512,7 +511,6 @@ func (t *TranspositionTable) Probe(key uint64, minDepth int) (ttEntry, bool, boo
 
 func (t *TranspositionTable) Save(key uint64, mv Move, score int, depth int, flag uint8) {
 	depth = min(depth, 63)
-	score = max(min(score, 32767), -32768)
 	idx := int(key & t.mask)
 	old := t.entries[idx]
 	newPacked := packEntry(uint32(mv), int16(score), uint8(t.gen), uint8(depth), flag)
