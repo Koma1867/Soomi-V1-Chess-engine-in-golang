@@ -12,7 +12,7 @@
 
 ## Features
 - Bitboard move generation using Magic Bitboards
-- Evaluation based on material, piece-square tables, mobility, passed pawns, and king safety
+- Evaluation based on material and piece-square tables.
 - Tapered evaluation
 - Negamax search with Alpha-Beta pruning
 - Principal Variation Search (PVS)
