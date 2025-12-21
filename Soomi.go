@@ -1625,10 +1625,6 @@ func (p *Position) evaluate() int {
 
 func (p *Position) orderMoves(moves []Move, bestMove, killer1, killer2 Move) []Move {
 	n := len(moves)
-	if n <= 1 {
-		return moves
-	}
-
 	var stackScores [256]int
 	scores := stackScores[:n]
 
@@ -2091,10 +2087,7 @@ func (tc *TimeControl) shouldStop() bool {
 		return true
 	}
 	d := tc.deadline
-	if d.IsZero() {
-		return false
-	}
-	return time.Until(d) <= 0
+	return !d.IsZero() && time.Until(d) <= 0
 }
 
 func (tc *TimeControl) shouldContinue(lastIter time.Duration) bool {
