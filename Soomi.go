@@ -1984,11 +1984,7 @@ func (p *Position) search(tc *TimeControl) Move {
 			pv = pvBuf[:0]
 			score = p.negamax(depth, -Infinity, Infinity, 0, &pv, tc, &ss)
 		}
-
-		if !tc.shouldStop() {
-			prevScore = score
-		}
-
+		prevScore = score
 		iterNodes := p.localNodes
 
 		elapsed := time.Since(start)
@@ -2173,9 +2169,6 @@ func parseSetOption(parts []string) (name, value string) {
 		return "", ""
 	}
 	if nameEnd == -1 {
-		if nameStart >= len(parts) {
-			return "", ""
-		}
 		return strings.Join(parts[nameStart:], " "), ""
 	}
 
@@ -2183,10 +2176,6 @@ func parseSetOption(parts []string) (name, value string) {
 		return "", ""
 	}
 	name = strings.Join(parts[nameStart:nameEnd], " ")
-
-	if valueStart >= len(parts) {
-		return name, ""
-	}
 	value = strings.Join(parts[valueStart:], " ")
 	return name, value
 }
