@@ -47,8 +47,6 @@ const (
 	continueMargin       time.Duration = 10 * time.Millisecond
 	MaxGamePly                         = 1024
 	ZobristSeed                        = 1070372
-	FileA                              = 0x0101010101010101
-	FileH                              = 0x8080808080808080
 	totalPhase                         = 24
 )
 
@@ -71,28 +69,11 @@ const (
 )
 
 const (
-	KnightMobZeroPoint   = 2
-	KnightMobCpPerMove   = 4
-	BishopMobZeroPoint   = 3
-	BishopMobCpPerMove   = 4
-	RookMobZeroPoint     = 3
-	RookMobCpPerMove     = 5
-	QueenMobZeroPoint    = 10
-	QueenMobCpPerMove    = 1
-	EgMobCpPerMove       = 1
-	KnightAttackWeight   = 8
-	BishopAttackWeight   = 4
-	RookAttackWeight     = 5
-	QueenAttackWeight    = 6
-	PhaseScale           = 256
-	MVVLVAWeight         = 100
-	MaxKingSafetyPenalty = 300
+	PhaseScale   = 256
+	MVVLVAWeight = 100
 )
 
 var (
-	kingZoneMask      [2][64]Bitboard
-	passedPawnBonusMG = [8]int{0, 5, 10, 20, 35, 60, 100, 0}
-	passedPawnBonusEG = [8]int{0, 10, 20, 40, 70, 140, 260, 0}
 	pieceValues       = [6]int{100, 300, 325, 500, 900, 20000}
 	pst               [2][6][64]int
 	pstEnd            [2][6][64]int
@@ -214,34 +195,6 @@ func (p *Position) computePhase() int {
 func (p *Position) isEndgame() bool {
 	phase := p.computePhase()
 	return phase > 18
-}
-
-func initKingZoneMasks() {
-	for sq := 0; sq < 64; sq++ {
-		baseZone := kingAttacks[sq] | sqBB[sq]
-
-		r := sq / 8
-
-		whiteZone := baseZone
-		if r < 5 {
-			whiteZone |= sqBB[sq+16]
-
-			if r < 4 {
-				whiteZone |= sqBB[sq+24]
-			}
-		}
-		kingZoneMask[White][sq] = whiteZone
-
-		blackZone := baseZone
-
-		if r > 2 {
-			blackZone |= sqBB[sq-16]
-			if r > 3 {
-				blackZone |= sqBB[sq-24]
-			}
-		}
-		kingZoneMask[Black][sq] = blackZone
-	}
 }
 
 func rookMask(sq int) Bitboard {
@@ -539,70 +492,69 @@ func init() {
 	initSqBB()
 	initAttacks()
 	initMagicBitboards()
-	initKingZoneMasks()
 	InitTT(defaultTTSizeMB)
 }
 
 func initPST() {
 	pst[White][Pawn] = [64]int{
 		0, 0, 0, 0, 0, 0, 0, 0,
-		-6, 6, 6, -14, -14, 6, 6, -6,
-		-6, 0, -8, 6, 6, -8, 0, -6,
-		0, 2, 10, 22, 22, 10, 2, 0,
-		6, 6, 16, 26, 26, 16, 6, 6,
-		10, 12, 20, 30, 30, 20, 12, 10,
-		20, 20, 20, 20, 20, 20, 20, 20,
+		-5, 10, 10, -20, -20, 10, 10, -5,
+		0, 0, -10, 5, 5, 0, 0, 0,
+		0, 0, 10, 20, 20, 10, 5, 0,
+		10, 10, 15, 25, 25, 15, 10, 10,
+		15, 15, 20, 30, 30, 20, 15, 15,
+		30, 30, 30, 40, 40, 30, 30, 30,
 		0, 0, 0, 0, 0, 0, 0, 0,
 	}
 
 	pst[White][Knight] = [64]int{
-		-50, -40, -30, -30, -30, -30, -40, -50,
-		-40, -20, 0, 6, 6, 0, -20, -40,
-		-30, 6, 12, 16, 16, 12, 6, -30,
-		-30, 0, 16, 22, 22, 16, 0, -30,
-		-30, 6, 16, 24, 24, 16, 6, -30,
-		-30, 0, 12, 16, 16, 12, 0, -30,
-		-40, -20, 0, 0, 0, 0, -20, -40,
-		-50, -40, -30, -30, -30, -30, -40, -50,
+		-30, -20, -10, -10, -10, -10, -20, -30,
+		-20, -10, 5, 5, 5, 5, -10, -20,
+		-20, 5, 15, 15, 15, 15, 5, -20,
+		-10, 5, 15, 20, 20, 15, 5, -10,
+		-10, 5, 15, 25, 25, 15, 5, -10,
+		-20, 5, 10, 15, 15, 10, 5, -20,
+		-20, 0, 0, 0, 0, 0, 0, -20,
+		-30, -10, -10, -10, -10, -10, -20, -30,
 	}
 
 	pst[White][Bishop] = [64]int{
 		-20, -10, -10, -10, -10, -10, -10, -20,
-		-10, 18, 0, 0, 0, 0, 18, -10,
-		-10, 0, 6, 12, 12, 6, 0, -10,
-		-10, 6, 6, 12, 12, 6, 6, -10,
-		-10, 0, 12, 16, 16, 12, 0, -10,
-		-10, 10, 10, 16, 16, 10, 10, -10,
-		-10, 6, 0, 0, 0, 0, 6, -10,
+		-10, 10, 5, 5, 5, 5, 10, -10,
+		-10, 5, 5, 15, 15, 5, 5, -10,
+		-10, 5, 5, 15, 15, 5, 5, -10,
+		-10, 5, 10, 20, 20, 10, 5, -10,
+		-10, 10, 10, 15, 15, 10, 10, -10,
+		-10, 10, 5, 5, 5, 5, 10, -10,
 		-20, -10, -10, -10, -10, -10, -10, -20,
 	}
 
 	pst[White][Rook] = [64]int{
-		0, 0, 0, 5, 5, 0, 0, 0,
+		0, 0, 5, 10, 10, 5, 0, 0,
 		-5, 0, 0, 0, 0, 0, 0, -5,
 		-5, 0, 0, 0, 0, 0, 0, -5,
 		-5, 0, 0, 0, 0, 0, 0, -5,
 		-5, 0, 0, 0, 0, 0, 0, -5,
 		-5, 0, 0, 0, 0, 0, 0, -5,
-		10, 12, 12, 15, 15, 12, 12, 10,
+		10, 15, 15, 20, 20, 15, 15, 10,
 		0, 0, 0, 5, 5, 0, 0, 0,
 	}
 
 	pst[White][Queen] = [64]int{
 		-20, -10, -10, -5, -5, -10, -10, -20,
 		-10, 0, 0, 0, 0, 0, 0, -10,
-		-10, 0, 4, 4, 4, 4, 0, -10,
-		-5, 0, 4, 4, 4, 4, 0, -5,
-		0, 0, 4, 4, 4, 4, 0, -5,
-		-10, 4, 4, 4, 4, 4, 0, -10,
-		-10, 0, 4, 0, 0, 0, 0, -10,
+		-10, 0, 5, 5, 5, 5, 0, -10,
+		-5, 0, 5, 5, 5, 5, 0, -5,
+		-5, 0, 5, 5, 5, 5, 0, -5,
+		-10, 5, 5, 5, 5, 5, 5, -10,
+		-10, 0, 5, 5, 5, 5, 0, -10,
 		-20, -10, -10, -5, -5, -10, -10, -20,
 	}
 
 	pst[White][King] = [64]int{
-		50, 40, 5, -20, -20, 5, 40, 50,
+		30, 20, 5, -20, -20, 5, 20, 30,
 		10, 10, -15, -30, -30, -15, 10, 10,
-		-10, -20, -20, -20, -20, -20, -20, -10,
+		-20, -20, -20, -20, -20, -20, -20, -20,
 		-20, -30, -30, -40, -40, -30, -30, -20,
 		-30, -40, -40, -50, -50, -40, -40, -30,
 		-30, -40, -40, -50, -50, -40, -40, -30,
@@ -612,40 +564,40 @@ func initPST() {
 
 	pstEnd[White][Pawn] = [64]int{
 		0, 0, 0, 0, 0, 0, 0, 0,
-		4, 4, 4, 4, 4, 4, 4, 4,
+		0, 0, 0, 0, 0, 0, 0, 0,
 		10, 10, 10, 10, 10, 10, 10, 10,
 		20, 20, 20, 20, 20, 20, 20, 20,
-		34, 34, 34, 34, 34, 34, 34, 34,
-		48, 48, 48, 48, 48, 48, 48, 48,
+		30, 30, 30, 30, 30, 30, 30, 30,
+		40, 40, 40, 40, 40, 40, 40, 40,
 		60, 60, 60, 60, 60, 60, 60, 60,
 		0, 0, 0, 0, 0, 0, 0, 0,
 	}
 
 	pstEnd[White][Knight] = [64]int{
-		-48, -38, -28, -28, -28, -28, -38, -48,
-		-38, -18, 0, 2, 2, 0, -18, -38,
-		-28, 2, 10, 14, 14, 10, 2, -28,
-		-28, 6, 14, 20, 20, 14, 6, -28,
-		-28, 2, 14, 20, 20, 14, 2, -28,
-		-28, 6, 10, 14, 14, 10, 6, -28,
-		-38, -18, 0, 4, 4, 0, -18, -38,
-		-48, -38, -28, -28, -28, -28, -38, -48,
+		-20, -10, -5, -5, -5, -5, -10, -20,
+		-10, 0, 0, 0, 0, 0, 0, -10,
+		-10, 5, 5, 5, 5, 5, 5, -10,
+		-5, 5, 5, 10, 10, 5, 5, -5,
+		-5, 5, 5, 10, 10, 5, 5, -5,
+		-10, 5, 5, 5, 5, 5, 5, -10,
+		-10, 0, 0, 0, 0, 0, 0, -10,
+		-20, -10, -5, -5, -5, -5, -10, -20,
 	}
 
 	pstEnd[White][Bishop] = [64]int{
-		-20, -10, -10, -10, -10, -10, -10, -20,
-		-10, 0, 0, 0, 0, 0, 0, -10,
-		-10, 0, 6, 12, 12, 6, 0, -10,
-		-10, 6, 12, 16, 16, 12, 6, -10,
-		-10, 0, 12, 16, 16, 12, 0, -10,
-		-10, 6, 12, 16, 16, 12, 6, -10,
-		-10, 10, 6, 6, 6, 6, 10, -10,
-		-20, -10, -10, -10, -10, -10, -10, -20,
+		-10, -5, -5, -5, -5, -5, -5, -10,
+		-5, 0, 0, 0, 0, 0, 0, -5,
+		-5, 0, 5, 5, 5, 5, 0, -5,
+		-5, 0, 5, 5, 5, 5, 0, -5,
+		-5, 0, 5, 5, 5, 5, 0, -5,
+		-5, 0, 5, 5, 5, 5, 0, -5,
+		-5, 0, 0, 0, 0, 0, 0, -5,
+		-10, -5, -5, -5, -5, -5, -5, -10,
 	}
 
 	pstEnd[White][Rook] = [64]int{
 		0, 0, 0, 0, 0, 0, 0, 0,
-		6, 10, 10, 10, 10, 10, 10, 6,
+		0, 0, 0, 0, 0, 0, 0, 0,
 		-5, 0, 0, 0, 0, 0, 0, -5,
 		-5, 0, 0, 0, 0, 0, 0, -5,
 		-5, 0, 0, 0, 0, 0, 0, -5,
@@ -655,25 +607,25 @@ func initPST() {
 	}
 
 	pstEnd[White][Queen] = [64]int{
-		-20, -10, -10, -5, -5, -10, -10, -20,
-		-10, 0, 0, 0, 0, 0, 0, -10,
-		-10, 0, 4, 4, 4, 4, 0, -10,
-		-5, 0, 4, 4, 4, 4, 0, -5,
-		-5, 0, 4, 4, 4, 4, 0, -5,
-		-10, 0, 4, 4, 4, 4, 0, -10,
-		-10, 0, 0, 0, 0, 0, 0, -10,
-		-20, -10, -10, -5, -5, -10, -10, -20,
+		0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0,
 	}
 
 	pstEnd[White][King] = [64]int{
-		-50, -40, -30, -20, -20, -30, -40, -50,
-		-30, -20, -10, 0, 0, -10, -20, -30,
-		-30, -10, 20, 30, 30, 20, -10, -30,
-		-30, -10, 30, 40, 40, 30, -10, -30,
-		-30, -10, 30, 40, 40, 30, -10, -30,
-		-30, -10, 20, 30, 30, 20, -10, -30,
-		-30, -30, 0, 0, 0, 0, -30, -30,
-		-50, -40, -30, -20, -20, -30, -40, -50,
+		-20, -10, -10, -10, -10, -10, -10, -20,
+		-10, 0, 0, 0, 0, 0, 0, -10,
+		-10, 0, 10, 20, 20, 10, 0, -10,
+		-10, 0, 10, 30, 30, 10, 0, -10,
+		-10, 0, 10, 30, 30, 10, 0, -10,
+		-10, 0, 10, 20, 20, 10, 0, -10,
+		-10, 0, 0, 0, 0, 0, 0, -10,
+		-20, -10, -10, -10, -10, -10, -10, -20,
 	}
 
 	for pt := 0; pt < 6; pt++ {
@@ -1470,146 +1422,13 @@ func (p *Position) unmakeNullMove(undo Undo) {
 	p.side ^= 1
 }
 
-func (p *Position) calculateMobilityAndAttacks(side int) (mgScore, egScore int, attackUnits int) {
-	us := side
-	them := us ^ 1
-	empty := ^p.all
-	theirKingBB := p.pieces[them][King]
-	theirKingSq := bits.TrailingZeros64(uint64(theirKingBB))
-	theirKingZone := kingZoneMask[them][theirKingSq]
-
-	for bb := p.pieces[us][Knight]; bb != 0; {
-		from := popLSB(&bb)
-		attacks := knightAttacks[from]
-		mobility := attacks & empty
-		count := bits.OnesCount64(uint64(mobility))
-		mgScore += (count - KnightMobZeroPoint) * KnightMobCpPerMove
-		egScore += count * EgMobCpPerMove
-		kingZoneAttacks := attacks & theirKingZone
-		attackUnits += KnightAttackWeight * bits.OnesCount64(uint64(kingZoneAttacks))
-	}
-
-	for bb := p.pieces[us][Bishop]; bb != 0; {
-		from := popLSB(&bb)
-		attacks := bishopAttacks(from, p.all)
-
-		mobility := attacks & empty
-		count := bits.OnesCount64(uint64(mobility))
-		mgScore += (count - BishopMobZeroPoint) * BishopMobCpPerMove
-		egScore += count * EgMobCpPerMove
-
-		kingZoneAttacks := attacks & theirKingZone
-		attackUnits += BishopAttackWeight * bits.OnesCount64(uint64(kingZoneAttacks))
-	}
-
-	for bb := p.pieces[us][Rook]; bb != 0; {
-		from := popLSB(&bb)
-		attacks := rookAttacks(from, p.all)
-
-		mobility := attacks & empty
-		count := bits.OnesCount64(uint64(mobility))
-		mgScore += (count - RookMobZeroPoint) * RookMobCpPerMove
-		egScore += count * EgMobCpPerMove
-
-		kingZoneAttacks := attacks & theirKingZone
-		attackUnits += RookAttackWeight * bits.OnesCount64(uint64(kingZoneAttacks))
-	}
-
-	for bb := p.pieces[us][Queen]; bb != 0; {
-		from := popLSB(&bb)
-		attacks := rookAttacks(from, p.all) | bishopAttacks(from, p.all)
-
-		mobility := attacks & empty
-		count := bits.OnesCount64(uint64(mobility))
-		mgScore += (count - QueenMobZeroPoint) * QueenMobCpPerMove
-		egScore += count * EgMobCpPerMove
-
-		kingZoneAttacks := attacks & theirKingZone
-		attackUnits += QueenAttackWeight * bits.OnesCount64(uint64(kingZoneAttacks))
-	}
-
-	return mgScore, egScore, attackUnits
-}
-
-func (p *Position) evaluateKingSafety(attackUnits int) int {
-	score := (attackUnits * attackUnits) / 5
-	if score > MaxKingSafetyPenalty {
-		return -MaxKingSafetyPenalty
-	}
-	return -score
-}
-
-func northFill(bb Bitboard) Bitboard {
-	bb |= bb << 8
-	bb |= bb << 16
-	bb |= bb << 32
-	return bb
-}
-
-func southFill(bb Bitboard) Bitboard {
-	bb |= bb >> 8
-	bb |= bb >> 16
-	bb |= bb >> 32
-	return bb
-}
-
-func (p *Position) evaluatePassedPawns(side int) (mgScore, egScore int) {
-	us := side
-	them := us ^ 1
-	ourPawns := p.pieces[us][Pawn]
-	if ourPawns == 0 {
-		return 0, 0
-	}
-	theirPawns := p.pieces[them][Pawn]
-
-	var passedPawns Bitboard
-	if us == White {
-		frontSpans := southFill(theirPawns >> 8)
-		adjacentFileMasks := ((theirPawns >> 1) &^ FileH) | ((theirPawns << 1) &^ FileA)
-		adjacentFrontSpans := southFill(adjacentFileMasks >> 8)
-		passedPawns = ourPawns &^ frontSpans &^ adjacentFrontSpans
-	} else {
-		frontSpans := northFill(theirPawns << 8)
-		adjacentFileMasks := ((theirPawns >> 1) &^ FileH) | ((theirPawns << 1) &^ FileA)
-		adjacentFrontSpans := northFill(adjacentFileMasks << 8)
-		passedPawns = ourPawns &^ frontSpans &^ adjacentFrontSpans
-	}
-
-	for bb := passedPawns; bb != 0; {
-		sq := popLSB(&bb)
-		rank := sq / 8
-		if us == Black {
-			rank = 7 - rank
-		}
-		mgScore += passedPawnBonusMG[rank]
-		egScore += passedPawnBonusEG[rank]
-	}
-	return
-}
-
 func (p *Position) evaluate() int {
 	a := p.material[White] - p.material[Black]
 	b := p.psqScore[White] - p.psqScore[Black]
 	c := p.psqScoreEG[White] - p.psqScoreEG[Black]
 
-	wMobMG, wMobEG, wAttackUnits := p.calculateMobilityAndAttacks(White)
-	bMobMG, bMobEG, bAttackUnits := p.calculateMobilityAndAttacks(Black)
-
-	mobilityMG := wMobMG - bMobMG
-	mobilityEG := wMobEG - bMobEG
-
-	wPassMG, wPassEG := p.evaluatePassedPawns(White)
-	bPassMG, bPassEG := p.evaluatePassedPawns(Black)
-
-	passedMG := wPassMG - bPassMG
-	passedEG := wPassEG - bPassEG
-
-	wKingSafety := p.evaluateKingSafety(bAttackUnits)
-	bKingSafety := p.evaluateKingSafety(wAttackUnits)
-	kingSafety := wKingSafety - bKingSafety
-
-	mg := a + b + mobilityMG + passedMG + kingSafety
-	eg := a + c + mobilityEG + passedEG
+	mg := a + b
+	eg := a + c
 
 	ph := p.computePhase()
 	phaseScaled := ((totalPhase-ph)*PhaseScale + totalPhase/2) / totalPhase
