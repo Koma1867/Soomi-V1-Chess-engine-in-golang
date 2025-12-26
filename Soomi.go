@@ -22,6 +22,26 @@ const (
 	King   = 5
 )
 
+/*
+  ----------------------------------------------------------------------------------
+   BITBOARD REPRESENTATION
+  ----------------------------------------------------------------------------------
+   The board is represented as a series of 64-bit integers, where each bit corresponds to a square on the chess board.
+
+   Visual Mapping
+
+   Rank 8 | 56 57 58 59 60 61 62 63
+   Rank 7 | 48 49 50 51 52 53 54 55
+   Rank 6 | 40 41 42 43 44 45 46 47
+   Rank 5 | 32 33 34 35 36 37 38 39
+   Rank 4 | 24 25 26 27 28 29 30 31
+   Rank 3 | 16 17 18 19 20 21 22 23
+   Rank 2 |  8  9 10 11 12 13 14 15
+   Rank 1 |  0  1  2  3  4  5  6  7
+           -----------------------
+             A  B  C  D  E  F  G  H
+*/
+
 const (
 	MaxDepth                           = 32
 	Infinity                           = 30000
@@ -85,6 +105,30 @@ var (
 	rookAttackTable   [102400]Bitboard
 	bishopAttackTable [5248]Bitboard
 )
+
+/*
+  ----------------------------------------------------------------------------------
+   MAGIC BITBOARDS
+  ----------------------------------------------------------------------------------
+   Magic bitboards allows for instant sliding piece attacks
+
+   The concept goes as follows
+   1. Mask     A. Isolate relevant blocker squares for a piece at square X.
+   2. Multiply B. Occupancy * MagicNumber (this scatters bits into high-order positions).
+   3. Shift    C. Right shift to extract an index.
+   4. Lookup   D. Use index to fetch pre-calculated attack set from a table.
+
+   [ Occupancy on Board ]  &  [ Movement Mask ]
+             |
+             v
+      [ Masked Blockers ]  * [ Magic Number ]
+             |
+             v
+      [   Scattered Bits (Hash)   ]  >>  (64 - BitsInMask)
+             |
+             v
+        [ Index ]  --->  [ Attack Table ]  --->  [ Attack Bitboard ]
+*/
 
 type MagicEntry struct {
 	mask   Bitboard
@@ -178,6 +222,27 @@ type SearchStack struct {
 	killer1 Move
 	killer2 Move
 }
+
+/*
+  ----------------------------------------------------------------------------------
+   TAPERED EVALUATION (Phase Calculation)
+  ----------------------------------------------------------------------------------
+   Chess strategy changes as pieces are exchanged. We use a "Phase" variable
+   to interpolate between Middle Game (MG) and End Game (EG) scores.
+   This combats evaluation discontinuity
+
+   Total Phase = 24 (Based on piece weights: N=1, B=1, R=2, Q=4)
+
+   Score Formula:
+      FinalScore = ( (MG_Score * Phase) + (EG_Score * (256 - Phase)) ) / 256
+
+      Start Position (all 32 pieces)       King vs King
+      (Phase = 256)                       (Phase = 0)
+      [========================================]
+      ^                                        ^
+      |                                        |
+   Use mostly MG values                     Use mostly EG values
+*/
 
 func (p *Position) computePhase() int {
 	rem := 0
@@ -409,6 +474,26 @@ func (e ttEntry) unpack() (move uint32, score int16, gen uint8, depth uint8, fla
 	return
 }
 
+/*
+  ----------------------------------------------------------------------------------
+   TRANSPOSITION TABLE (TT)
+  ----------------------------------------------------------------------------------
+   A hash map that stores search results. It uses Zobrist Hashing, where the
+   board state is XORed with random 64-bit numbers.
+
+   Structure of an Entry (Packed into 64 bits):
+   [    Move (32b)    ] [ Score (16b) ] [ Gen (8b) ] [ Depth (6b) ] [ Flag (2b) ]
+   ^
+   |
+   (Upper 32 bits store the Move)
+
+   Lookup Process:
+   1. Compute Zobrist Hash of current position.
+   2. Index = Hash % TableSize.
+   3. Check if stored Key matches current Key.
+   4. If Depth >= NeededDepth, use the stored Score immediately.
+*/
+
 type TranspositionTable struct {
 	entries []ttEntry
 	mask    uint64
@@ -637,6 +722,26 @@ func initPST() {
 	}
 }
 
+/*
+  ----------------------------------------------------------------------------------
+   ZOBRIST HASHING INITIALIZATION
+  ----------------------------------------------------------------------------------
+   We assign a random 64-bit number to every possible board state component.
+
+   Components Hashed:
+   1. Piece at Square (e.g., White Pawn on E4)
+   2. Side to Move (White/Black)
+   3. Castling Rights (KQkq)
+   4. En Passant File
+
+   The final Board Hash is the XOR sum of all active components.
+   Hash = [WP_on_E4] ^ [BK_on_E8] ^ [WhiteToMove] ^ ...
+
+   Incremental Update:
+   When a piece moves, we don't recalculate from scratch. We XOR out the old
+   piece and XOR in the new one.
+*/
+
 func initZobrist() {
 	rng := uint64(ZobristSeed)
 	next := func() uint64 {
@@ -848,6 +953,21 @@ func (p *Position) inCheck() bool {
 	kingSq := bits.TrailingZeros64(uint64(kingBB))
 	return p.isAttacked(kingSq, p.side^1)
 }
+
+/*
+   Move Generation Strategy:
+   Instead of looping over every square, we loop over pieces (Bitboards).
+
+   Example:
+   for bb := knights; bb != 0; {
+       from := popLSB(&bb)         // Get location of a knight
+       attacks := lookup(from)     // Get all target squares
+       valid := attacks & ~us      // Remove friendly fire
+   }
+
+   This _Piece-Centric_ approach is much faster than _Square-Centric_ loops
+   because empty squares are skipped entirely.
+*/
 
 func (p *Position) generateMovesTo(buf []Move, capturesOnly bool) int {
 	i := 0
@@ -1440,6 +1560,20 @@ func (p *Position) evaluate() int {
 	return score
 }
 
+/*
+  ----------------------------------------------------------------------------------
+   MOVE ORDERING
+  ----------------------------------------------------------------------------------
+   To prune the search tree effectively, we must search the best moves first.
+
+   Sorting Priority List:
+   1. Hash Move     --> The best move found at the previous depth
+   2. Promotions    --> Moves that create a Queen are usually critical
+   3. Good Captures --> Most Valuable Victim, Least Valuable Attacker, e.g. Pawn(1) capturing Queen(9) is prioritized over Queen(9) capturing Pawn(1).
+   4. Killer Moves  --> Quiet moves that caused a cutoff in a sibling node
+   5. PST moves     --> Moves that according to PST move from a bad square to a better one.
+*/
+
 func (p *Position) orderMoves(moves []Move, bestMove, killer1, killer2 Move) []Move {
 	n := len(moves)
 	var stackScores [256]int
@@ -1497,6 +1631,22 @@ func (p *Position) orderMoves(moves []Move, bestMove, killer1, killer2 Move) []M
 
 	return moves
 }
+
+/*
+  ----------------------------------------------------------------------------------
+   QUIESCENCE SEARCH
+  ----------------------------------------------------------------------------------
+   Standard search stops at a fixed depth, but this can lead to the "Horizon Effect",
+   where the engine misses critical tactical sequences just beyond the search depth.
+
+   Scenario:
+   Depth 4: White takes Black Queen. Eval says White is +900. STOP (time ran out etc...)
+   Depth 5: Black takes back White Queen immediately after. Eval is actually Equal.
+
+   Solution:
+   When Depth is 0, do NOT stop if there are "noisy" moves (usually limited to captures), though some people include checks and promotions.
+   Keep searching strictly through noisy moves until the position is "Quiet".
+*/
 
 func (p *Position) quiesce(alpha, beta, ply int, tc *TimeControl) int {
 	p.localNodes++
@@ -1572,6 +1722,30 @@ func (p *Position) quiesce(alpha, beta, ply int, tc *TimeControl) int {
 
 	return best
 }
+
+/*
+  ----------------------------------------------------------------------------------
+   NEGAMAX SEARCH WITH ALPHA-BETA PRUNING
+  ----------------------------------------------------------------------------------
+   This function explores the game tree to find the best move. It uses the Negamax
+   framework where max(a, b) = -min(-b, -a), simplifying code for 2-player zero-sum games.
+
+          [ Root Node ]
+          /     |     \
+      [Move A] [Move B] [Move C]
+        /         |        \
+     ...         ...      (Pruned?)
+
+   Key Optimizations used here:
+   1. Transposition Table (TT): Cache results to avoid re-searching identical positions.
+   2. Null Move Pruning (NMP): "Pass" the move; if still safe, the position is too good (cutoff).
+   3. Late Move Reductions (LMR): Search moves that were ordered as less promising at lower depth first.
+   4. Quiescence Search: At leaf nodes, play out captures to avoid "horizon effects".
+
+   Alpha (α): Best score the maximizing player can guarantee so far.
+   Beta  (β): Best score the minimizing player can guarantee so far.
+   Condition: If Score >= Beta, we have a "Cutoff" (branch is too good, opponent won't allow it).
+*/
 
 func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeControl, ss *[MaxDepth + 100]SearchStack) int {
 
@@ -1772,6 +1946,27 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 	return bestScore
 }
 
+/*
+  ----------------------------------------------------------------------------------
+   ITERATIVE DEEPENING SEARCH
+  ----------------------------------------------------------------------------------
+   Instead of searching directly to Depth 10, we search Depth 1, then 2, then 3...
+   This might seem slower than just going directly to depth 10, but it offers unique advantages:
+
+   Visual Timeline:
+   [Start] ->
+    Search D=1 -> BestMove A
+	Search D=2 -> BestMove A (uses info from depth 1 to sort moves)
+	Search D=3 -> BestMove B (found a better move)
+	[Time Up!] -> Return result, even if iteration is unfinished. This is safe because even though its an unfinished iteration,
+	We searched the previous completed iteration fully, sorted that move as likely the best for this iteration as well,
+	so we either return that or an even better move.
+
+   Benefits:
+   1. Time Management: We always have a "best move so far" if we must stop abruptly (as we do in chess).
+   2. Move Ordering: The BestMove from Depth X-1 is the first move searched at Depth X.
+*/
+
 func (p *Position) search(tc *TimeControl) Move {
 	var bestMove Move
 	var ss [MaxDepth + 100]SearchStack
@@ -1856,9 +2051,29 @@ func (p *Position) search(tc *TimeControl) Move {
 	return bestMove
 }
 
+// -------------------------------------------
+// TIME CONTROL
+// -------------------------------------------
 func (tc *TimeControl) Stop() {
 	atomic.StoreInt32(&tc.stopped, 1)
 }
+
+/*
+  ----------------------------------------------------------------------------------
+   TIME MANAGEMENT HEURISTICS
+  ----------------------------------------------------------------------------------
+   Deciding how much time to spend on a move is hard balance to find.
+   - Too little: We play hasty, weak moves.
+   - Too much: We likely flag (run out of time) later in the game.
+
+   Strategy:
+   1. Moves To Go: Assume the game lasts ~20-30-40 more moves (Can be whatever you like).
+   2. Increment: Always safely bank on the increment (winc/binc).
+   3. Safety Buffer: Subtract a margin (minTimeMs) to account for possible GUI lag.
+
+   Formula:
+    TimeForMove = (RemainingTime / MovesToGo) + Increment
+*/
 
 func (tc *TimeControl) allocateTime(side int) {
 	if tc.movetime > 0 {
@@ -1923,6 +2138,31 @@ func (tc *TimeControl) shouldContinue(lastIter time.Duration) bool {
 	minRequired := lastIter*nextIterMult + continueMargin
 	return remain > minRequired
 }
+
+/*
+  ----------------------------------------------------------------------------------
+   PERFT (Performance Test & Move Generation Validator)
+  ----------------------------------------------------------------------------------
+   Perft is a debugging function that traverses the move tree to a specific depth
+   and counts the number of leaf nodes.
+
+   Why is this useful?
+   It verifies that the move generator (generateMovesTo, makeMove, unmakeMove) is
+   mostly bug-free. We compare the results against known values for the start position.
+
+   Example (Depth 1):
+   Start Pos -> 20 legal moves. Perft(1) should return 20.
+
+   Divide:
+   "Divide" prints the child count for *each* root move separately.
+   Perft 2 Divide Example:
+   e2e4: 20
+   e2e3: 20
+   g1f3: 20
+   --------
+   Total: 400
+   This isolates exactly which move branch contains a possible bug, if node counts differ from known results.
+*/
 
 func (p *Position) perft(depth int) int {
 	if depth == 0 {
