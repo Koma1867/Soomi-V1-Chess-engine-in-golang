@@ -29,7 +29,7 @@ const (
 	AspirationBase                     = 30
 	AspirationStep                     = 1
 	AspirationStartDepth               = 4
-	DefaultMovesToGo                   = 30
+	DefaultMovesToGo                   = 20
 	NodeCheckMaskSearch                = 1023
 	DeltaMargin                        = 150
 	LMRMinChildDepth                   = 3
@@ -74,7 +74,7 @@ const (
 )
 
 var (
-	pieceValues       = [6]int{100, 300, 325, 500, 900, 20000}
+	pieceValues       = [6]int{100, 320, 300, 500, 900, 20000}
 	pst               [2][6][64]int
 	pstEnd            [2][6][64]int
 	piecePhase        = [6]int{0, 1, 1, 2, 4, 0}
@@ -500,7 +500,7 @@ func initPST() {
 		0, 0, 0, 0, 0, 0, 0, 0,
 		-5, 10, 10, -20, -20, 10, 10, -5,
 		0, 0, -10, 5, 5, 0, 0, 0,
-		0, 0, 10, 20, 20, 10, 5, 0,
+		0, -10, 10, 20, 20, 10, 5, 0,
 		10, 10, 15, 25, 25, 15, 10, 10,
 		15, 15, 20, 30, 30, 20, 15, 15,
 		30, 30, 30, 40, 40, 30, 30, 30,
