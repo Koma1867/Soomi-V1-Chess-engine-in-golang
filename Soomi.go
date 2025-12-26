@@ -1741,10 +1741,20 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 	}
 
 	if legalMoves == 0 {
+		var result int
 		if inCheck {
-			return -Mate + ply
+			result = -Mate + ply
+		} else {
+			result = 0
 		}
-		return 0
+		storeScore := result
+		if storeScore > Mate-MateScoreGuard {
+			storeScore += ply
+		} else if storeScore < -Mate+MateScoreGuard {
+			storeScore -= ply
+		}
+		tt.Save(p.hash, Move(0), storeScore, depth, ttFlagExact)
+		return result
 	}
 
 	flag := ttFlagExact
