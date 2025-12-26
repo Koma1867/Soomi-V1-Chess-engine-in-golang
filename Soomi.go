@@ -1600,7 +1600,7 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 
 		if pv == nil {
 			scoreFromTT := int(score)
-			isMateScore := scoreFromTT > Mate-MaxDepth || scoreFromTT < -Mate+MaxDepth
+			isMateScore := scoreFromTT > Mate-MateScoreGuard || scoreFromTT < -Mate+MateScoreGuard
 			if isMateScore {
 				if scoreFromTT > 0 {
 					scoreFromTT -= ply
@@ -1684,20 +1684,16 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 			childDepth := depth - 1
 			k := &ss[ply]
 			isKiller := m == k.killer1 || m == k.killer2
-			canReduce := childDepth >= LMRMinChildDepth &&
-				!inCheck &&
-				!m.isCapture() && !m.isPromo() && legalMoves > LMRLateMoveAfter &&
-				!pvNode && !isKiller
+			canReduce := childDepth >= LMRMinChildDepth && !inCheck && !m.isCapture() && !m.isPromo() && legalMoves > LMRLateMoveAfter && !pvNode && !isKiller
+			var eff int
 			if canReduce {
 				red := 1 + (childDepth-LMRMinChildDepth)/6 + (legalMoves-3)/6
-				eff := childDepth - red
-				if eff < 1 {
-					score = -p.negamax(childDepth, -beta, -alpha, ply+1, nil, tc, ss)
-				} else {
-					score = -p.negamax(eff, -alpha-1, -alpha, ply+1, nil, tc, ss)
-					if score > alpha {
-						score = -p.negamax(childDepth, -beta, -alpha, ply+1, pvPtr, tc, ss)
-					}
+				eff = childDepth - red
+			}
+			if canReduce && eff >= 1 {
+				score = -p.negamax(eff, -alpha-1, -alpha, ply+1, nil, tc, ss)
+				if score > alpha {
+					score = -p.negamax(childDepth, -beta, -alpha, ply+1, pvPtr, tc, ss)
 				}
 			} else {
 				if legalMoves > 1 && pvNode {
@@ -1722,9 +1718,9 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 			}
 
 			storeScore := score
-			if storeScore > Mate-MaxDepth {
+			if storeScore > Mate-MateScoreGuard {
 				storeScore += ply
-			} else if storeScore < -Mate+MaxDepth {
+			} else if storeScore < -Mate+MateScoreGuard {
 				storeScore -= ply
 			}
 			tt.Save(p.hash, m, storeScore, depth, ttFlagLower)
@@ -1775,14 +1771,11 @@ func (p *Position) search(tc *TimeControl) Move {
 		maxDepth = MaxDepth
 	}
 
+	p.localNodes = 0
+	start := time.Now()
 	var prevScore int
 	var pvBuf [MaxDepth]Move
 	for depth := 1; depth <= maxDepth; depth++ {
-
-		p.localNodes = 0
-
-		start := time.Now()
-
 		pv := pvBuf[:0]
 		var score int
 
