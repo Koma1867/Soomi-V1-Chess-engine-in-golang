@@ -16,7 +16,7 @@
 - Tapered evaluation
 - Negamax search with Alpha-Beta pruning
 - Principal Variation Search (PVS)
-- Iterative Deepening with depth-based Aspiration Windows
+- Iterative Deepening with Aspiration Windows
 - Transposition Table
 - Check extensions
 - Quiescence Search with Delta Pruning
