@@ -46,8 +46,7 @@ const (
 	MaxDepth                           = 32
 	Infinity                           = 30000
 	Mate                               = 29000
-	AspirationBase                     = 30
-	AspirationStep                     = 1
+	AspirationBase                     = 50
 	AspirationStartDepth               = 4
 	DefaultMovesToGo                   = 20
 	NodeCheckMaskSearch                = 1023
@@ -1833,7 +1832,6 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 
 	if depth >= 3 && !inCheck && !p.isEndgame() && pv == nil {
 		R := 3
-
 		undo := p.makeNullMove()
 		score := -p.negamax(depth-1-R, -beta, -beta+1, ply+1, nil, tc, ss)
 		p.unmakeNullMove(undo)
@@ -2005,7 +2003,7 @@ func (p *Position) search(tc *TimeControl) Move {
 		needFull := false
 		if depth >= AspirationStartDepth {
 			base := prevScore
-			window := AspirationBase + depth*AspirationStep
+			window := AspirationBase
 			low := base - window
 			high := base + window
 			score = p.negamax(depth, low, high, 0, &pv, tc, &ss)
