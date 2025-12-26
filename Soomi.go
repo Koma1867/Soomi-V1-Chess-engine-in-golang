@@ -175,6 +175,24 @@ var bishopMagicNumbers = [64]uint64{
 	0x0000000010020200, 0x0000000404080200, 0x0000040404040400, 0x0002020202020200,
 }
 
+/*
+  ----------------------------------------------------------------------------------
+   MOVE BIT-PACKING
+  ----------------------------------------------------------------------------------
+   To save memory and increase speed, a Move is not a struct, but a single 32-bit integer.
+   We pack the 'From' square, 'To' square, and 'Flags' (promotion/capture type) into specific bits.
+
+   [ 31 ... 16 ] [ 15 14 13 12 ] [ 11 10 9 8 7 6 ] [ 5 4 3 2 1 0 ]
+     (Unused)       Flag (4b)       To Sq (6b)      From Sq (6b)
+                       ^                 ^                ^
+                       |                 |                |
+   Example:           0100 (Capture)    111000 (H8)      000000 (A1)
+
+   - Mask 0x3F (63) extracts squares (0-63).
+   - Shift >> 6 moves the 'To' bits to the bottom.
+   - Shift >> 12 moves the 'Flag' bits to the bottom.
+*/
+
 type Bitboard uint64
 type Move uint32
 
@@ -2241,6 +2259,21 @@ func parseSetOption(parts []string) (name, value string) {
 	value = strings.Join(parts[valueStart:], " ")
 	return name, value
 }
+
+/*
+  ----------------------------------------------------------------------------------
+   UCI MAIN LOOP (Universal Chess Interface)
+  ----------------------------------------------------------------------------------
+   This is the communication part. The GUI (Arena, Banksia, Cutechess) sends text commands, we reply with text.
+
+   [ GUI ] -------- "position startpos moves e2e4" ---->  [ ENGINE ]
+   [ GUI ] <------- "info depth 5 score cp 20..." ------  [ ENGINE ]
+   [ GUI ] -------- "go wtime 60000" ------------------>  [ ENGINE ]
+   [ GUI ] <------- "bestmove e7e5" --------------------  [ ENGINE ]
+
+   The loop waits for Stdin input, parses the string, and triggers engine functions.
+   It must be non-blocking where possible to handle "stop" commands.
+*/
 
 func uciLoop() {
 	pos := NewPosition()
