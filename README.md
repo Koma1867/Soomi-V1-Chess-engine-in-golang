@@ -22,13 +22,13 @@
 - Quiescence Search with Delta Pruning
 - Pruning techniques including Late Move Reductions (LMR), Null Move Pruning (NMP), and Mate Distance Pruning
 - Move ordering using Hash move, MVV-LVA (captures), and killers & piece square tables for quiet moves
-- Full UCI protocol support (compatible with Arena, others not tested)
+- UCI protocol (compatible with Arena, others not tested)
 - Simple time management
 
 ## Limitations
 - No FEN parsing: Input/output is limited to UCI position commands.
 - Single-threaded: The engine runs on a single core and does not support pondering.
-- Hand-tuned Evaluation: The evaluation terms are manually tuned rather than using automated tuning methods like SPSA, basically taken "from the hat"
+- Hand-tuned Evaluation: The evaluation terms are manually tuned, basically taken "from the hat"
 
 ## Build & Run
 Install Go (1.20+ recommended): https://go.dev/doc/install
