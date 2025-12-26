@@ -1768,6 +1768,7 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 
 	p.localNodes++
 
+	// Time check
 	if (p.localNodes & NodeCheckMaskSearch) == 0 {
 		if tc.shouldStop() {
 			return alpha
@@ -1783,6 +1784,7 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 		return p.quiesce(alpha, beta, ply, tc)
 	}
 
+	// Transposition table lookup
 	origAlpha := alpha
 	var hashMove Move
 	if e, found, usable := tt.Probe(p.hash, depth); found {
@@ -1817,6 +1819,7 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 		}
 	}
 
+	// Mate distance pruning
 	if beta > Mate-ply {
 		if alpha >= Mate-ply {
 			return Mate - ply
@@ -1830,6 +1833,7 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 		alpha = -Mate + ply
 	}
 
+	// Null move pruning
 	if depth >= 3 && !inCheck && !p.isEndgame() && pv == nil {
 		R := 3
 		undo := p.makeNullMove()
@@ -1871,6 +1875,7 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 		if p.isDraw() {
 			score = 0
 		} else {
+			// Late move reductions & Principal variation search
 			childDepth := depth - 1
 			k := &ss[ply]
 			isKiller := m == k.killer1 || m == k.killer2
@@ -1900,6 +1905,7 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 		p.unmakeMove(m, undo)
 
 		if score >= beta {
+			// Update killers
 			if !m.isCapture() && !m.isPromo() && m != hashMove {
 				k := &ss[ply]
 				if m != k.killer1 {
@@ -1907,6 +1913,7 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 				}
 			}
 
+			// Store in transposition table
 			storeScore := score
 			if storeScore > Mate-MateScoreGuard {
 				storeScore += ply
@@ -1917,11 +1924,13 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 			return beta
 		}
 
+		// Update best move
 		if score > bestScore {
 			bestScore = score
 			bestMove = m
 		}
 
+		// Update alpha
 		if score > alpha {
 			alpha = score
 			if pv != nil {
@@ -1930,6 +1939,7 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 		}
 	}
 
+	// Handle draw & checkmate results
 	if legalMoves == 0 {
 		var result int
 		if inCheck {
@@ -1992,6 +2002,7 @@ func (p *Position) search(tc *TimeControl) Move {
 		maxDepth = MaxDepth
 	}
 
+	// Start timers
 	p.localNodes = 0
 	start := time.Now()
 	var prevScore int
@@ -2000,6 +2011,7 @@ func (p *Position) search(tc *TimeControl) Move {
 		pv := pvBuf[:0]
 		var score int
 
+		// Aspiration windows
 		needFull := false
 		if depth >= AspirationStartDepth {
 			base := prevScore
@@ -2035,8 +2047,8 @@ func (p *Position) search(tc *TimeControl) Move {
 			bestMove = pv[0]
 		}
 
+		// Print search info
 		absScore := abs(score)
-
 		if absScore >= Mate-MateScoreGuard {
 			matePly := Mate - absScore
 			mateMoves := (matePly + 1) / 2
@@ -2056,6 +2068,7 @@ func (p *Position) search(tc *TimeControl) Move {
 		}
 		fmt.Println()
 
+		// Return result
 		if absScore >= Mate-MateScoreGuard {
 			return bestMove
 		}
