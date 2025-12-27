@@ -1843,7 +1843,7 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 		if hashMove != 0 && !hashMove.isCapture() {
 			eval := p.evaluate()
 			// If we are far above beta, we can return soft fail
-			if eval >= beta+150*depth {
+			if eval >= beta+DeltaMargin*depth {
 				return eval
 			}
 		}
@@ -2305,7 +2305,7 @@ func parseSetOption(parts []string) (name, value string) {
 func uciLoop() {
 	pos := NewPosition()
 	scanner := bufio.NewScanner(os.Stdin)
-	fmt.Fprintln(os.Stderr, "# Soomi V1.1.8 ready. Type 'help' for available commands.")
+	fmt.Fprintln(os.Stderr, "# Soomi V1.1.9 ready. Type 'help' for available commands.")
 
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -2317,7 +2317,7 @@ func uciLoop() {
 
 		switch cmd {
 		case "uci":
-			fmt.Println("id name Soomi V1.1.8")
+			fmt.Println("id name Soomi V1.1.9")
 			fmt.Println("id author Otto Laukkanen")
 			fmt.Println("option name Hash type spin default 256 min 1 max 4096")
 			fmt.Println("uciok")
@@ -2538,7 +2538,7 @@ func uciLoop() {
 }
 
 func printHelp() {
-	fmt.Println(`# Soomi V1.1.8 - Available Commands:
+	fmt.Println(`# Soomi V1.1.9 - Available Commands:
 
 UCI Protocol Commands:
   uci                              - Initialize UCI mode
@@ -2583,11 +2583,11 @@ Example Usage:
 }
 
 func main() {
-	fmt.Fprintln(os.Stderr, "Soomi V1.1.8 - UCI Chess Engine")
+	fmt.Fprintln(os.Stderr, "Soomi V1.1.9 - UCI Chess Engine")
 	fmt.Fprintln(os.Stderr, "Type 'help' for available commands or 'uci' to enter UCI mode")
 	fmt.Fprintln(os.Stderr)
 	uciLoop()
 }
 
 // To make an executable
-// go build -trimpath -ldflags "-s -w" -gcflags "all=-B" -o Soomi-V1.1.8.exe soomi.go
+// go build -trimpath -ldflags "-s -w" -gcflags "all=-B" -o Soomi-V1.1.9.exe soomi.go
