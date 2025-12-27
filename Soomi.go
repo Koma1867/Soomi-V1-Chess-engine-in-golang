@@ -654,7 +654,7 @@ func initPST() {
 	}
 
 	pst[White][King] = [64]int{
-		30, 20, 5, -20, -20, 5, 20, 30,
+		30, 20, 5, -10, -10, 5, 20, 30,
 		10, 10, -15, -30, -30, -15, 10, 10,
 		-20, -20, -20, -20, -20, -20, -20, -20,
 		-20, -30, -30, -40, -40, -30, -30, -20,
@@ -1819,6 +1819,11 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 		}
 	}
 
+	// IIR
+	if depth >= 4 && hashMove == 0 {
+		depth--
+	}
+
 	// Mate distance pruning
 	if beta > Mate-ply {
 		if alpha >= Mate-ply {
@@ -1833,9 +1838,20 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 		alpha = -Mate + ply
 	}
 
+	// RFP check
+	if depth <= 8 && !inCheck && !p.isEndgame() {
+		if hashMove != 0 && !hashMove.isCapture() {
+			eval := p.evaluate()
+			// If we are far above beta, we can return soft fail
+			if eval >= beta+150*depth {
+				return eval
+			}
+		}
+	}
+
 	// Null move pruning
 	if depth >= 3 && !inCheck && !p.isEndgame() && pv == nil {
-		R := 3
+		R := 2
 		undo := p.makeNullMove()
 		score := -p.negamax(depth-1-R, -beta, -beta+1, ply+1, nil, tc, ss)
 		p.unmakeNullMove(undo)
@@ -1879,7 +1895,7 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 			childDepth := depth - 1
 			k := &ss[ply]
 			isKiller := m == k.killer1 || m == k.killer2
-			canReduce := childDepth >= LMRMinChildDepth && !inCheck && !m.isCapture() && !m.isPromo() && legalMoves > LMRLateMoveAfter && !pvNode && !isKiller
+			canReduce := childDepth >= LMRMinChildDepth && !inCheck && !m.isCapture() && !m.isPromo() && legalMoves > LMRLateMoveAfter && !isKiller
 			var eff int
 			if canReduce {
 				red := 1 + (childDepth-LMRMinChildDepth)/6 + (legalMoves-3)/6
