@@ -1849,9 +1849,10 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 		}
 	}
 
-	// Null move pruning
-	if depth >= 3 && !inCheck && !p.isEndgame() && pv == nil {
-		R := 2
+	// Adaptive Null Move Pruning
+	if depth >= 3 && !inCheck && !p.isEndgame() {
+		R := 3 + depth/6
+
 		undo := p.makeNullMove()
 		score := -p.negamax(depth-1-R, -beta, -beta+1, ply+1, nil, tc, ss)
 		p.unmakeNullMove(undo)
@@ -1893,9 +1894,7 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 		} else {
 			// Late move reductions & Principal variation search
 			childDepth := depth - 1
-			k := &ss[ply]
-			isKiller := m == k.killer1 || m == k.killer2
-			canReduce := childDepth >= LMRMinChildDepth && !inCheck && !m.isCapture() && !m.isPromo() && legalMoves > LMRLateMoveAfter && !isKiller
+			canReduce := childDepth >= LMRMinChildDepth && !inCheck && !m.isCapture() && !m.isPromo() && legalMoves > LMRLateMoveAfter
 			var eff int
 			if canReduce {
 				red := 1 + (childDepth-LMRMinChildDepth)/6 + (legalMoves-3)/6
