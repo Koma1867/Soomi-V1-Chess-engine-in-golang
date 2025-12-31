@@ -1,0 +1,3862 @@
+package main
+
+import (
+	"bufio"
+	"fmt"
+	"math"
+	"math/bits"
+	"os"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+)
+
+const (
+	White  = 0
+	Black  = 1
+	Pawn   = 0
+	Knight = 1
+	Bishop = 2
+	Rook   = 3
+	Queen  = 4
+	King   = 5
+)
+
+/*
+  ----------------------------------------------------------------------------------
+   BITBOARD REPRESENTATION
+  ----------------------------------------------------------------------------------
+   The board is represented as a series of 64-bit integers, where each bit corresponds to a square on the chess board.
+
+   Visual Mapping
+
+   Rank 8 | 56 57 58 59 60 61 62 63
+   Rank 7 | 48 49 50 51 52 53 54 55
+   Rank 6 | 40 41 42 43 44 45 46 47
+   Rank 5 | 32 33 34 35 36 37 38 39
+   Rank 4 | 24 25 26 27 28 29 30 31
+   Rank 3 | 16 17 18 19 20 21 22 23
+   Rank 2 |  8  9 10 11 12 13 14 15
+   Rank 1 |  0  1  2  3  4  5  6  7
+           -----------------------
+             A  B  C  D  E  F  G  H
+*/
+
+const (
+	MaxDepth                           = 32
+	Infinity                           = 30000
+	Mate                               = 29000
+	AspirationBase                     = 50
+	AspirationStartDepth               = 4
+	DefaultMovesToGo                   = 20
+	NodeCheckMaskSearch                = 1023
+	DeltaMargin                        = 150
+	LMRMinChildDepth                   = 3
+	LMRLateMoveAfter                   = 6
+	MateScoreGuard                     = 1000
+	defaultTTSizeMB                    = 256
+	scoreHash                          = 1000000
+	scorePromoBase                     = 900000
+	scoreCaptureBase                   = 800000
+	scoreKiller1                       = 750000
+	scoreKiller2                       = 740000
+	minTimeMs            int64         = 5
+	perMoveCapDiv        int64         = 3
+	nextIterMult                       = 2
+	continueMargin       time.Duration = 10 * time.Millisecond
+	MaxGamePly                         = 1024
+	ZobristSeed                        = 1070372
+	totalPhase                         = 24
+)
+
+const (
+	FlagQuiet         = 0
+	FlagCapture       = 4
+	FlagEP            = 5
+	FlagCastle        = 2
+	FlagPromoN        = 8
+	FlagPromoB        = 9
+	FlagPromoR        = 10
+	FlagPromoQ        = 11
+	FlagPromoCN       = 12
+	FlagPromoCB       = 13
+	FlagPromoCR       = 14
+	FlagPromoCQ       = 15
+	ttFlagExact uint8 = 0
+	ttFlagLower uint8 = 1
+	ttFlagUpper uint8 = 2
+)
+
+const (
+	PhaseScale    = 256
+	MVVLVAWeight  = 100
+	MaxHistory    = 16384
+	pawnTableSize = 131072 // 4MB table (131072 * 32 bytes)
+)
+
+type pawnEntry struct {
+	key     uint64 // Hash of only the pawn positions
+	mgScore int
+	egScore int
+}
+
+var (
+	pawnTable             []pawnEntry
+	pieceValues           = [6]int{100, 320, 300, 500, 900, 20000}
+	pst                   [2][6][64]int
+	pstEnd                [2][6][64]int
+	piecePhase            = [6]int{0, 1, 1, 2, 4, 0}
+	currentTC             atomic.Pointer[TimeControl]
+	searchWG              sync.WaitGroup
+	tt                    *TranspositionTable
+	rookMagics            [64]MagicEntry
+	bishopMagics          [64]MagicEntry
+	rookAttackTable       [102400]Bitboard
+	bishopAttackTable     [5248]Bitboard
+	passedPawnBonus       [8]int
+	isolatedPawnPenalty   int
+	doubledPawnPenalty    int
+	bonusBishopPair       int
+	bonusRookOpenFile     int
+	bonusRookSemiOpenFile int
+	bonusPawnShield       int
+	penaltyPawnStorm      int
+	bonusKnightOutpost    int
+	penaltyKingTropism    int
+	bonusRookOn7th        int
+	penaltyTrappedBishop  int
+	penaltyTrappedRook    int
+	mobilityBonus         [4][]int // Knight, Bishop, Rook, Queen
+	kingZoneMask          [64]Bitboard
+	kingAttackerWeight    [6]int // P, N, B, R, Q, K (P and K usually 0 or special)
+	history               [2][64][64]int
+	countermoves          [2][64][64]Move
+	lineBB                [64][64]Bitboard
+	lmrTable              [MaxDepth + 1][256]int
+)
+
+/*
+  ----------------------------------------------------------------------------------
+   MAGIC BITBOARDS
+  ----------------------------------------------------------------------------------
+   Magic bitboards allows for instant sliding piece attacks
+
+   The concept goes as follows
+   1. Mask     A. Isolate relevant blocker squares for a piece at square X.
+   2. Multiply B. Occupancy * MagicNumber (this scatters bits into high-order positions).
+   3. Shift    C. Right shift to extract an index.
+   4. Lookup   D. Use index to fetch pre-calculated attack set from a table.
+
+   [ Occupancy on Board ]  &  [ Movement Mask ]
+             |
+             v
+      [ Masked Blockers ]  * [ Magic Number ]
+             |
+             v
+      [   Scattered Bits (Hash)   ]  >>  (64 - BitsInMask)
+             |
+             v
+        [ Index ]  --->  [ Attack Table ]  --->  [ Attack Bitboard ]
+*/
+
+type MagicEntry struct {
+	mask   Bitboard
+	magic  Bitboard
+	shift  uint8
+	offset uint32
+}
+
+var rookMagicNumbers = [64]uint64{
+	0x0080001020400080, 0x0040001000200040, 0x0080081000200080, 0x0080040800100080,
+	0x0080020400080080, 0x0080010200040080, 0x0080008001000200, 0x0080002040800100,
+	0x0000800020400080, 0x0000400020005000, 0x0000801000200080, 0x0000800800100080,
+	0x0000800400080080, 0x0000800200040080, 0x0000800100020080, 0x0000800040800100,
+	0x0000208000400080, 0x0000404000201000, 0x0000808010002000, 0x0000808008001000,
+	0x0000808004000800, 0x0000808002000400, 0x0000010100020004, 0x0000020000408104,
+	0x0000208080004000, 0x0000200040005000, 0x0000100080200080, 0x0000080080100080,
+	0x0000040080080080, 0x0000020080040080, 0x0000010080800200, 0x0000800080004100,
+	0x0000204000800080, 0x0000200040401000, 0x0000100080802000, 0x0000080080801000,
+	0x0000040080800800, 0x0000020080800400, 0x0000020001010004, 0x0000800040800100,
+	0x0000204000808000, 0x0000200040008080, 0x0000100020008080, 0x0000080010008080,
+	0x0000040008008080, 0x0000020004008080, 0x0000010002008080, 0x0000004081020004,
+	0x0000204000800080, 0x0000200040008080, 0x0000100020008080, 0x0000080010008080,
+	0x0000040008008080, 0x0000020004008080, 0x0000800100020080, 0x0000800041000080,
+	0x00FFFCDDFCED714A, 0x007FFCDDFCED714A, 0x003FFFCDFFD88096, 0x0000040810002101,
+	0x0001000204080011, 0x0001000204000801, 0x0001000082000401, 0x0001FFFAABFAD1A2,
+}
+
+var bishopMagicNumbers = [64]uint64{
+	0x0002020202020200, 0x0002020202020000, 0x0004010202000000, 0x0004040080000000,
+	0x0001104000000000, 0x0000821040000000, 0x0000410410400000, 0x0000104104104000,
+	0x0000040404040400, 0x0000020202020200, 0x0000040102020000, 0x0000040400800000,
+	0x0000011040000000, 0x0000008210400000, 0x0000004104104000, 0x0000002082082000,
+	0x0004000808080800, 0x0002000404040400, 0x0001000202020200, 0x0000800802004000,
+	0x0000800400A00000, 0x0000200100884000, 0x0000400082082000, 0x0000200041041000,
+	0x0002080010101000, 0x0001040008080800, 0x0000208004010400, 0x0000404004010200,
+	0x0000840000802000, 0x0000404002011000, 0x0000808001041000, 0x0000404000820800,
+	0x0001041000202000, 0x0000820800101000, 0x0000104400080800, 0x0000020080080080,
+	0x0000404040040100, 0x0000808100020100, 0x0001010100020800, 0x0000808080010400,
+	0x0000820820004000, 0x0000410410002000, 0x0000082088001000, 0x0000002011000800,
+	0x0000080100400400, 0x0001010101000200, 0x0002020202000400, 0x0001010101000200,
+	0x0000410410400000, 0x0000208208200000, 0x0000002084100000, 0x0000000020880000,
+	0x0000001002020000, 0x0000040408020000, 0x0004040404040000, 0x0002020202020000,
+	0x0000104104104000, 0x0000002082082000, 0x0000000020841000, 0x0000000000208800,
+	0x0000000010020200, 0x0000000404080200, 0x0000040404040400, 0x0002020202020200,
+}
+
+/*
+  ----------------------------------------------------------------------------------
+   MOVE BIT-PACKING
+  ----------------------------------------------------------------------------------
+   To save memory and increase speed, a Move is not a struct, but a single 32-bit integer.
+   We pack the 'From' square, 'To' square, and 'Flags' (promotion/capture type) into specific bits.
+
+   [ 31 ... 16 ] [ 15 14 13 12 ] [ 11 10 9 8 7 6 ] [ 5 4 3 2 1 0 ]
+     (Unused)       Flag (4b)       To Sq (6b)      From Sq (6b)
+                       ^                 ^                ^
+                       |                 |                |
+   Example:           0100 (Capture)    111000 (H8)      000000 (A1)
+
+   - Mask 0x3F (63) extracts squares (0-63).
+   - Shift >> 6 moves the 'To' bits to the bottom.
+   - Shift >> 12 moves the 'Flag' bits to the bottom.
+*/
+
+type Bitboard uint64
+type Move uint32
+
+type Position struct {
+	pieces           [2][6]Bitboard
+	occupied         [2]Bitboard
+	all              Bitboard
+	side             int
+	castle           int
+	epSquare         int
+	halfmove         int
+	hash             uint64
+	material         [2]int
+	psqScore         [2]int
+	psqScoreEG       [2]int
+	square           [64]int
+	historyKeys      [MaxGamePly]uint64
+	historyPly       int
+	lastIrreversible int
+	localNodes       int64
+	pawnHash         uint64
+	kingSq           [2]int
+	phase            int
+}
+
+type Undo struct {
+	castle           int
+	epSquare         int
+	halfmove         int
+	captured         int
+	lastIrreversible int
+}
+
+type TimeControl struct {
+	wtime     int64
+	btime     int64
+	winc      int64
+	binc      int64
+	movestogo int
+	movetime  int64
+	infinite  bool
+	depth     int
+	deadline  time.Time
+	stopped   int32
+}
+
+type SearchStack struct {
+	killer1 Move
+	killer2 Move
+}
+
+/*
+  ----------------------------------------------------------------------------------
+   TAPERED EVALUATION (Phase Calculation)
+  ----------------------------------------------------------------------------------
+   Chess strategy changes a lot as pieces are exchanged. We use a "Phase" variable
+   to interpolate between Middle Game (MG) and End Game (EG) scores.
+   This combats evaluation discontinuity, a major source of instability
+
+   Total Phase = 24 (Based on piece weights: N=1, B=1, R=2, Q=4)
+
+   Score Formula:
+      FinalScore = ( (MG_Score * Phase) + (EG_Score * (256 - Phase)) ) / 256
+
+      Start Position (all 32 pieces)       King vs King
+      (Phase = 256)                       (Phase = 0)
+      [========================================]
+      ^                                        ^
+      |                                        |
+   Use mostly MG values                     Use mostly EG values
+*/
+
+func (p *Position) computePhase() int {
+	rem := 0
+	for pt := Knight; pt <= Queen; pt++ {
+		bb := p.pieces[White][pt] | p.pieces[Black][pt]
+		rem += bits.OnesCount64(uint64(bb)) * piecePhase[pt]
+	}
+	p.phase = totalPhase - rem
+	return p.phase
+}
+
+func (p *Position) isEndgame() bool {
+	return p.phase > 18
+}
+
+func rookMask(sq int) Bitboard {
+	result := Bitboard(0)
+	r, f := sq/8, sq%8
+
+	for rr := r + 1; rr <= 6; rr++ {
+		result |= Bitboard(1) << (rr*8 + f)
+	}
+	for rr := r - 1; rr >= 1; rr-- {
+		result |= Bitboard(1) << (rr*8 + f)
+	}
+
+	for ff := f + 1; ff <= 6; ff++ {
+		result |= Bitboard(1) << (r*8 + ff)
+	}
+	for ff := f - 1; ff >= 1; ff-- {
+		result |= Bitboard(1) << (r*8 + ff)
+	}
+
+	return result
+}
+
+func bishopMask(sq int) Bitboard {
+	result := Bitboard(0)
+	r, f := sq/8, sq%8
+
+	for rr, ff := r+1, f+1; rr <= 6 && ff <= 6; rr, ff = rr+1, ff+1 {
+		result |= Bitboard(1) << (rr*8 + ff)
+	}
+
+	for rr, ff := r-1, f+1; rr >= 1 && ff <= 6; rr, ff = rr-1, ff+1 {
+		result |= Bitboard(1) << (rr*8 + ff)
+	}
+
+	for rr, ff := r-1, f-1; rr >= 1 && ff >= 1; rr, ff = rr-1, ff-1 {
+		result |= Bitboard(1) << (rr*8 + ff)
+	}
+
+	for rr, ff := r+1, f-1; rr <= 6 && ff >= 1; rr, ff = rr+1, ff-1 {
+		result |= Bitboard(1) << (rr*8 + ff)
+	}
+
+	return result
+}
+
+func occupancyVariations(mask Bitboard) []Bitboard {
+	bits := []int{}
+	for sq := 0; sq < 64; sq++ {
+		if mask&(Bitboard(1)<<sq) != 0 {
+			bits = append(bits, sq)
+		}
+	}
+
+	n := len(bits)
+	count := 1 << n
+	variations := make([]Bitboard, count)
+
+	for i := 0; i < count; i++ {
+		occ := Bitboard(0)
+		for j := 0; j < n; j++ {
+			if i&(1<<j) != 0 {
+				occ |= Bitboard(1) << bits[j]
+			}
+		}
+		variations[i] = occ
+	}
+
+	return variations
+}
+
+func magicIndex(occ Bitboard, magic Bitboard, shift uint8) uint32 {
+	return uint32((occ * magic) >> shift)
+}
+
+func initMagicBitboards() {
+	rookTableSize := 0
+	bishopTableSize := 0
+
+	for sq := 0; sq < 64; sq++ {
+		mask := rookMask(sq)
+		bitCount := bits.OnesCount64(uint64(mask))
+		rookMagics[sq].mask = mask
+		rookMagics[sq].magic = Bitboard(rookMagicNumbers[sq])
+		rookMagics[sq].shift = 64 - uint8(bitCount)
+		rookMagics[sq].offset = uint32(rookTableSize)
+		rookTableSize += 1 << bitCount
+
+		mask = bishopMask(sq)
+		bitCount = bits.OnesCount64(uint64(mask))
+		bishopMagics[sq].mask = mask
+		bishopMagics[sq].magic = Bitboard(bishopMagicNumbers[sq])
+		bishopMagics[sq].shift = 64 - uint8(bitCount)
+		bishopMagics[sq].offset = uint32(bishopTableSize)
+		bishopTableSize += 1 << bitCount
+	}
+
+	for sq := 0; sq < 64; sq++ {
+		mask := rookMagics[sq].mask
+		variations := occupancyVariations(mask)
+
+		for _, occ := range variations {
+			attacks := rookAttacksClassical(sq, occ)
+			idx := magicIndex(occ, rookMagics[sq].magic, rookMagics[sq].shift)
+			rookAttackTable[rookMagics[sq].offset+idx] = attacks
+		}
+	}
+
+	for sq := 0; sq < 64; sq++ {
+		mask := bishopMagics[sq].mask
+		variations := occupancyVariations(mask)
+
+		for _, occ := range variations {
+			attacks := bishopAttacksClassical(sq, occ)
+			idx := magicIndex(occ, bishopMagics[sq].magic, bishopMagics[sq].shift)
+			bishopAttackTable[bishopMagics[sq].offset+idx] = attacks
+		}
+	}
+}
+
+func rookAttacksClassical(sq int, occ Bitboard) Bitboard {
+	attacks := Bitboard(0)
+	r, f := sq/8, sq%8
+
+	for _, dr := range []int{1, -1} {
+		for rr := r + dr; rr >= 0 && rr < 8; rr += dr {
+			attacks |= Bitboard(1) << (rr*8 + f)
+			if occ&(Bitboard(1)<<(rr*8+f)) != 0 {
+				break
+			}
+		}
+	}
+
+	for _, df := range []int{1, -1} {
+		for ff := f + df; ff >= 0 && ff < 8; ff += df {
+			attacks |= Bitboard(1) << (r*8 + ff)
+			if occ&(Bitboard(1)<<(r*8+ff)) != 0 {
+				break
+			}
+		}
+	}
+	return attacks
+}
+
+func bishopAttacksClassical(sq int, occ Bitboard) Bitboard {
+	attacks := Bitboard(0)
+	r, f := sq/8, sq%8
+
+	dirs := [][2]int{{1, 1}, {-1, 1}, {-1, -1}, {1, -1}}
+	for _, dir := range dirs {
+		for rr, ff := r+dir[0], f+dir[1]; rr >= 0 && rr < 8 && ff >= 0 && ff < 8; rr, ff = rr+dir[0], ff+dir[1] {
+			attacks |= Bitboard(1) << (rr*8 + ff)
+			if occ&(Bitboard(1)<<(rr*8+ff)) != 0 {
+				break
+			}
+		}
+	}
+	return attacks
+}
+
+var sqBB [64]Bitboard
+
+func initSqBB() {
+	for i := 0; i < 64; i++ {
+		sqBB[i] = Bitboard(1) << uint(i)
+	}
+}
+
+var (
+	zobristPiece    [2][6][64]uint64
+	zobristSide     uint64
+	zobristCastleWK uint64
+	zobristCastleWQ uint64
+	zobristCastleBK uint64
+	zobristCastleBQ uint64
+	zobristEP       [8]uint64
+	knightAttacks   [64]Bitboard
+	kingAttacks     [64]Bitboard
+	pawnAttacks     [2][64]Bitboard
+)
+
+func (p *Position) isRepetition() bool {
+	target := p.hash
+	for i := p.historyPly - 2; i >= p.lastIrreversible; i -= 2 {
+		if p.historyKeys[i] == target {
+			return true
+		}
+	}
+	return false
+}
+
+func (p *Position) isDraw() bool {
+	return p.halfmove >= 100 || p.isRepetition() || p.isInsufficientMaterial()
+}
+
+func (p *Position) isInsufficientMaterial() bool {
+	if (p.pieces[White][Pawn] | p.pieces[Black][Pawn] | p.pieces[White][Rook] | p.pieces[Black][Rook] | p.pieces[White][Queen] | p.pieces[Black][Queen]) != 0 {
+		return false
+	}
+	// Since Kings are always present, a side has <= 1 minor piece if occupied count <= 2.
+	if bits.OnesCount64(uint64(p.occupied[White])) <= 2 && bits.OnesCount64(uint64(p.occupied[Black])) <= 2 {
+		return true
+	}
+	return false
+}
+
+type ttEntry struct {
+	key    uint64
+	packed uint64
+}
+
+func packEntry(move uint32, score int16, gen uint8, depth uint8, flag uint8) uint64 {
+	return uint64(move)<<32 | uint64(uint16(score))<<16 | uint64(gen)<<8 | uint64(depth)<<2 | uint64(flag&0x3)
+}
+
+func (e ttEntry) unpack() (move uint32, score int16, gen uint8, depth uint8, flag uint8) {
+	p := e.packed
+	move = uint32(p >> 32)
+	score = int16(p >> 16)
+	gen = uint8(p >> 8)
+	depth = uint8((p >> 2) & 0x3F)
+	flag = uint8(p & 0x3)
+	return
+}
+
+/*
+  ----------------------------------------------------------------------------------
+   TRANSPOSITION TABLE (TT)
+  ----------------------------------------------------------------------------------
+   A hash map that stores search results. It uses Zobrist Hashing, where the
+   board state is XORed with random 64-bit numbers.
+
+   Structure of an Entry (Packed into 64 bits):
+   [    Move (32b)    ] [ Score (16b) ] [ Gen (8b) ] [ Depth (6b) ] [ Flag (2b) ]
+   ^
+   |
+   (Upper 32 bits store the Move)
+
+   Lookup Process:
+   1. Compute Zobrist Hash of current position.
+   2. Index = Hash % TableSize.
+   3. Check if stored Key matches current Key.
+   4. If Depth >= NeededDepth, use the stored Score immediately.
+*/
+
+type TranspositionTable struct {
+	entries []ttEntry
+	mask    uint64
+	gen     uint32
+}
+
+func InitTT(sizeMB int) {
+	if sizeMB <= 0 {
+		sizeMB = defaultTTSizeMB
+	}
+
+	entrySize := uint64(16)
+	totalBytes := uint64(sizeMB) * 1024 * 1024
+	entries := totalBytes / entrySize
+	size := uint64(1)
+	for size<<1 <= entries {
+		size <<= 1
+	}
+	maxLen := uint64(^uint(0) >> 1)
+	if size > maxLen {
+		size = maxLen
+	}
+
+	tt = &TranspositionTable{
+		entries: make([]ttEntry, int(size)),
+		mask:    size - 1,
+		gen:     1,
+	}
+}
+
+func (t *TranspositionTable) Clear() {
+	t.gen++
+	if t.gen > 255 {
+		t.gen = 1
+		for i := range t.entries {
+			t.entries[i] = ttEntry{}
+		}
+	}
+}
+
+func (t *TranspositionTable) Probe(key uint64, minDepth int) (Move, int, uint8, int, bool, bool) {
+	idx := int(key & t.mask)
+	e := t.entries[idx]
+	if e.key != key {
+		return 0, 0, 0, 0, false, false
+	}
+	move, score, gen, depth, flag := e.unpack()
+	if gen != uint8(t.gen) {
+		return Move(move), int(score), flag, int(depth), true, false
+	}
+	return Move(move), int(score), flag, int(depth), true, int(depth) >= minDepth
+}
+
+func (t *TranspositionTable) Save(key uint64, mv Move, score int, depth int, flag uint8) {
+	depth = min(depth, 63)
+	idx := int(key & t.mask)
+	old := t.entries[idx]
+	newPacked := packEntry(uint32(mv), int16(score), uint8(t.gen), uint8(depth), flag)
+	if uint8(old.packed>>8) != uint8(t.gen) {
+		t.entries[idx] = ttEntry{key: key, packed: newPacked}
+		return
+	}
+
+	if old.key == key {
+		oldDepth := uint8((old.packed >> 2) & 0x3F)
+		oldFlag := uint8(old.packed & 0x3)
+		if depth > int(oldDepth) || (depth == int(oldDepth) && flag == ttFlagExact && oldFlag != ttFlagExact) {
+			t.entries[idx] = ttEntry{key: key, packed: newPacked}
+		}
+	} else {
+		oldDepth := uint8((old.packed >> 2) & 0x3F)
+		if depth >= int(oldDepth) {
+			t.entries[idx] = ttEntry{key: key, packed: newPacked}
+		}
+	}
+}
+
+func init() {
+	initPST()
+	initZobrist()
+	initSqBB()
+	initAttacks()
+	initMagicBitboards()
+	initLineBB()
+	initEvaluation()
+	initLMR()
+	InitTT(defaultTTSizeMB)
+	pawnTable = make([]pawnEntry, pawnTableSize)
+}
+
+func initLMR() {
+	for d := 1; d <= MaxDepth; d++ {
+		for m := 1; m < 256; m++ {
+			val := 0.5 + math.Log(float64(d))*math.Log(float64(m))/3.0
+			lmrTable[d][m] = int(val)
+		}
+	}
+}
+
+func initEvaluation() {
+	passedPawnBonus = [8]int{0, 10, 20, 40, 70, 110, 160, 0}
+	isolatedPawnPenalty = 15
+	doubledPawnPenalty = 10
+	bonusBishopPair = 30
+	bonusRookOpenFile = 20
+	bonusRookSemiOpenFile = 8
+	bonusPawnShield = 10
+	penaltyPawnStorm = 5
+	bonusKnightOutpost = 20
+	penaltyKingTropism = 2
+	bonusRookOn7th = 20
+	penaltyTrappedBishop = 50
+	penaltyTrappedRook = 40
+
+	mobilityBonus[0] = []int{-20, -10, 0, 10, 15, 20, 25, 30, 35}                                                                             // Knight
+	mobilityBonus[1] = []int{-20, -10, 0, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60}                                                         // Bishop
+	mobilityBonus[2] = []int{-20, -10, 0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60}                                                      // Rook
+	mobilityBonus[3] = []int{-40, -20, 0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 100, 105, 110, 115, 120} // Queen
+
+	kingAttackerWeight = [6]int{0, 2, 2, 3, 5, 0}
+
+	for sq := 0; sq < 64; sq++ {
+		mask := Bitboard(0)
+		r, f := sq/8, sq%8
+		for dr := -1; dr <= 1; dr++ {
+			for df := -1; df <= 1; df++ {
+				nr, nf := r+dr, f+df
+				if nr >= 0 && nr < 8 && nf >= 0 && nf < 8 {
+					mask |= sqBB[nr*8+nf]
+				}
+			}
+		}
+		// Include squares in front
+		if r < 7 {
+			mask |= (mask << 8)
+		}
+		if r > 0 {
+			mask |= (mask >> 8)
+		}
+		kingZoneMask[sq] = mask
+	}
+}
+
+func initPST() {
+	pst[White][Pawn] = [64]int{
+		0, 0, 0, 0, 0, 0, 0, 0,
+		-5, 10, 10, -20, -20, 10, 10, -5,
+		0, 0, -10, 5, 5, 0, 0, 0,
+		0, -10, 10, 20, 20, 10, 5, 0,
+		10, 10, 15, 25, 25, 15, 10, 10,
+		15, 15, 20, 30, 30, 20, 15, 15,
+		30, 30, 30, 40, 40, 30, 30, 30,
+		0, 0, 0, 0, 0, 0, 0, 0,
+	}
+
+	pst[White][Knight] = [64]int{
+		-30, -20, -10, -10, -10, -10, -20, -30,
+		-20, -10, 5, 5, 5, 5, -10, -20,
+		-20, 5, 15, 15, 15, 15, 5, -20,
+		-10, 5, 15, 20, 20, 15, 5, -10,
+		-10, 5, 15, 25, 25, 15, 5, -10,
+		-20, 5, 10, 15, 15, 10, 5, -20,
+		-20, 0, 0, 0, 0, 0, 0, -20,
+		-30, -10, -10, -10, -10, -10, -20, -30,
+	}
+
+	pst[White][Bishop] = [64]int{
+		-20, -10, -10, -10, -10, -10, -10, -20,
+		-10, 10, 5, 5, 5, 5, 10, -10,
+		-10, 5, 5, 15, 15, 5, 5, -10,
+		-10, 5, 5, 15, 15, 5, 5, -10,
+		-10, 5, 10, 20, 20, 10, 5, -10,
+		-10, 10, 10, 15, 15, 10, 10, -10,
+		-10, 10, 5, 5, 5, 5, 10, -10,
+		-20, -10, -10, -10, -10, -10, -10, -20,
+	}
+
+	pst[White][Rook] = [64]int{
+		0, 0, 5, 10, 10, 5, 0, 0,
+		-5, 0, 0, 0, 0, 0, 0, -5,
+		-5, 0, 0, 0, 0, 0, 0, -5,
+		-5, 0, 0, 0, 0, 0, 0, -5,
+		-5, 0, 0, 0, 0, 0, 0, -5,
+		-5, 0, 0, 0, 0, 0, 0, -5,
+		10, 15, 15, 20, 20, 15, 15, 10,
+		0, 0, 0, 5, 5, 0, 0, 0,
+	}
+
+	pst[White][Queen] = [64]int{
+		-20, -10, -10, -5, -5, -10, -10, -20,
+		-10, 0, 0, 0, 0, 0, 0, -10,
+		-10, 0, 5, 5, 5, 5, 0, -10,
+		-5, 0, 5, 5, 5, 5, 0, -5,
+		-5, 0, 5, 5, 5, 5, 0, -5,
+		-10, 5, 5, 5, 5, 5, 5, -10,
+		-10, 0, 5, 5, 5, 5, 0, -10,
+		-20, -10, -10, -5, -5, -10, -10, -20,
+	}
+
+	pst[White][King] = [64]int{
+		30, 20, 5, -10, -10, 5, 20, 30,
+		10, 10, -15, -30, -30, -15, 10, 10,
+		-20, -20, -20, -20, -20, -20, -20, -20,
+		-20, -30, -30, -40, -40, -30, -30, -20,
+		-30, -40, -40, -50, -50, -40, -40, -30,
+		-30, -40, -40, -50, -50, -40, -40, -30,
+		-30, -40, -40, -50, -50, -40, -40, -30,
+		-30, -40, -40, -50, -50, -40, -40, -30,
+	}
+
+	pstEnd[White][Pawn] = [64]int{
+		0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0,
+		10, 10, 10, 10, 10, 10, 10, 10,
+		20, 20, 20, 20, 20, 20, 20, 20,
+		30, 30, 30, 30, 30, 30, 30, 30,
+		40, 40, 40, 40, 40, 40, 40, 40,
+		60, 60, 60, 60, 60, 60, 60, 60,
+		0, 0, 0, 0, 0, 0, 0, 0,
+	}
+
+	pstEnd[White][Knight] = [64]int{
+		-20, -10, -5, -5, -5, -5, -10, -20,
+		-10, 0, 0, 0, 0, 0, 0, -10,
+		-10, 5, 5, 5, 5, 5, 5, -10,
+		-5, 5, 5, 10, 10, 5, 5, -5,
+		-5, 5, 5, 10, 10, 5, 5, -5,
+		-10, 5, 5, 5, 5, 5, 5, -10,
+		-10, 0, 0, 0, 0, 0, 0, -10,
+		-20, -10, -5, -5, -5, -5, -10, -20,
+	}
+
+	pstEnd[White][Bishop] = [64]int{
+		-10, -5, -5, -5, -5, -5, -5, -10,
+		-5, 0, 0, 0, 0, 0, 0, -5,
+		-5, 0, 5, 5, 5, 5, 0, -5,
+		-5, 0, 5, 5, 5, 5, 0, -5,
+		-5, 0, 5, 5, 5, 5, 0, -5,
+		-5, 0, 5, 5, 5, 5, 0, -5,
+		-5, 0, 0, 0, 0, 0, 0, -5,
+		-10, -5, -5, -5, -5, -5, -5, -10,
+	}
+
+	pstEnd[White][Rook] = [64]int{
+		0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0,
+		-5, 0, 0, 0, 0, 0, 0, -5,
+		-5, 0, 0, 0, 0, 0, 0, -5,
+		-5, 0, 0, 0, 0, 0, 0, -5,
+		-5, 0, 0, 0, 0, 0, 0, -5,
+		15, 20, 20, 25, 25, 20, 20, 15,
+		10, 10, 10, 10, 10, 10, 10, 10,
+	}
+
+	pstEnd[White][Queen] = [64]int{
+		0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0,
+	}
+
+	pstEnd[White][King] = [64]int{
+		-20, -10, -10, -10, -10, -10, -10, -20,
+		-10, 0, 0, 0, 0, 0, 0, -10,
+		-10, 0, 10, 20, 20, 10, 0, -10,
+		-10, 0, 10, 30, 30, 10, 0, -10,
+		-10, 0, 10, 30, 30, 10, 0, -10,
+		-10, 0, 10, 20, 20, 10, 0, -10,
+		-10, 0, 0, 0, 0, 0, 0, -10,
+		-20, -10, -10, -10, -10, -10, -10, -20,
+	}
+
+	// Mirror for black
+	for pt := 0; pt < 6; pt++ {
+		for sq := 0; sq < 64; sq++ {
+			bsq := sq ^ 56
+			pst[Black][pt][sq] = pst[White][pt][bsq]
+			pstEnd[Black][pt][sq] = pstEnd[White][pt][bsq]
+		}
+	}
+}
+
+/*
+  ----------------------------------------------------------------------------------
+   ZOBRIST HASHING INITIALIZATION
+  ----------------------------------------------------------------------------------
+   We assign a random 64-bit number to every possible board state component.
+
+   Components Hashed:
+   1. Piece at Square (e.g., White Pawn on E4)
+   2. Side to Move (White/Black)
+   3. Castling Rights (KQkq)
+   4. En Passant File
+
+   The final Board Hash is the XOR sum of all active components.
+   Hash = [WP_on_E4] ^ [BK_on_E8] ^ [WhiteToMove] ^ ...
+
+   Incremental Update:
+   When a piece moves, we don't recalculate from scratch. We XOR out the old
+   piece and XOR in the new one.
+*/
+
+func initZobrist() {
+	rng := uint64(ZobristSeed)
+	next := func() uint64 {
+		rng ^= rng << 13
+		rng ^= rng >> 7
+		rng ^= rng << 17
+		return rng
+	}
+
+	for c := 0; c < 2; c++ {
+		for pt := 0; pt < 6; pt++ {
+			for sq := 0; sq < 64; sq++ {
+				zobristPiece[c][pt][sq] = next()
+			}
+		}
+	}
+	zobristSide = next()
+	zobristCastleWK = next()
+	zobristCastleWQ = next()
+	zobristCastleBK = next()
+	zobristCastleBQ = next()
+	for i := 0; i < 8; i++ {
+		zobristEP[i] = next()
+	}
+}
+
+func initAttacks() {
+	knightDirs := []int{-17, -15, -10, -6, 6, 10, 15, 17}
+	kingDirs := []int{-9, -8, -7, -1, 1, 7, 8, 9}
+
+	for sq := 0; sq < 64; sq++ {
+		r, f := sq>>3, sq&7
+
+		for _, d := range knightDirs {
+			to := sq + d
+			if to >= 0 && to < 64 {
+				tr, tf := to>>3, to&7
+				if abs(r-tr) <= 2 && abs(f-tf) <= 2 {
+					knightAttacks[sq] |= sqBB[to]
+				}
+			}
+		}
+
+		for _, d := range kingDirs {
+			to := sq + d
+			if to >= 0 && to < 64 {
+				tr, tf := to>>3, to&7
+				if abs(r-tr) <= 1 && abs(f-tf) <= 1 {
+					kingAttacks[sq] |= sqBB[to]
+				}
+			}
+		}
+
+		if r < 7 && f > 0 {
+			pawnAttacks[White][sq] |= sqBB[sq+7]
+		}
+		if r < 7 && f < 7 {
+			pawnAttacks[White][sq] |= sqBB[sq+9]
+		}
+		if r > 0 && f > 0 {
+			pawnAttacks[Black][sq] |= sqBB[sq-9]
+		}
+		if r > 0 && f < 7 {
+			pawnAttacks[Black][sq] |= sqBB[sq-7]
+		}
+	}
+}
+
+func popLSB(b *Bitboard) int {
+	idx := bits.TrailingZeros64(uint64(*b))
+	*b &= *b - 1
+	return idx
+}
+
+func abs(x int) int {
+	if x < 0 {
+		return -x
+	}
+	return x
+}
+
+func makeMoves(from, to, flags int) Move {
+	return Move(from | (to << 6) | (flags << 12))
+}
+
+func (m Move) from() int       { return int(m) & 63 }
+func (m Move) to() int         { return int(m>>6) & 63 }
+func (m Move) flags() int      { return int(m >> 12) }
+func (m Move) isCapture() bool { return m.flags()&4 != 0 }
+func (m Move) isPromo() bool   { return m.flags()&8 != 0 }
+func (m Move) promoType() int  { return (m.flags() & 3) + Knight }
+
+func (m Move) String() string {
+	if m == 0 {
+		return "0000"
+	}
+	var buf [5]byte
+	from, to := m.from(), m.to()
+	buf[0] = byte('a' + from%8)
+	buf[1] = byte('1' + from/8)
+	buf[2] = byte('a' + to%8)
+	buf[3] = byte('1' + to/8)
+	if m.isPromo() {
+		buf[4] = "nbrq"[m.promoType()-Knight]
+		return string(buf[:5])
+	}
+	return string(buf[:4])
+}
+
+func NewPosition() *Position {
+	p := &Position{}
+	p.setStartPos()
+	return p
+}
+
+func (p *Position) setStartPos() {
+	*p = Position{}
+	for i := range p.square {
+		p.square[i] = -1
+	}
+
+	p.side = White
+	p.castle = 0xF
+	p.epSquare = -1
+
+	setPiece := func(sq, c, pc int) {
+		bb := sqBB[sq]
+		p.square[sq] = (c << 3) | pc
+		p.pieces[c][pc] |= bb
+		p.occupied[c] |= bb
+		p.all |= bb
+		p.material[c] += pieceValues[pc]
+		p.psqScore[c] += pst[c][pc][sq]
+		p.psqScoreEG[c] += pstEnd[c][pc][sq]
+		p.hash ^= zobristPiece[c][pc][sq]
+	}
+
+	for f := 0; f < 8; f++ {
+		setPiece(8+f, White, Pawn)
+	}
+	setPiece(0, White, Rook)
+	setPiece(7, White, Rook)
+	setPiece(1, White, Knight)
+	setPiece(6, White, Knight)
+	setPiece(2, White, Bishop)
+	setPiece(5, White, Bishop)
+	setPiece(3, White, Queen)
+	setPiece(4, White, King)
+
+	for f := 0; f < 8; f++ {
+		setPiece(48+f, Black, Pawn)
+	}
+	setPiece(56, Black, Rook)
+	setPiece(63, Black, Rook)
+	setPiece(57, Black, Knight)
+	setPiece(62, Black, Knight)
+	setPiece(58, Black, Bishop)
+	setPiece(61, Black, Bishop)
+	setPiece(59, Black, Queen)
+	setPiece(60, Black, King)
+	p.hash ^= zobristCastleWK
+	p.hash ^= zobristCastleWQ
+	p.hash ^= zobristCastleBK
+	p.hash ^= zobristCastleBQ
+	p.pawnHash = 0
+	for f := 0; f < 8; f++ {
+		p.pawnHash ^= zobristPiece[White][Pawn][8+f]
+		p.pawnHash ^= zobristPiece[Black][Pawn][48+f]
+	}
+	p.historyKeys[0] = p.hash
+	p.kingSq[White] = 4
+	p.kingSq[Black] = 60
+	p.computePhase()
+}
+
+func (p *Position) setFEN(fen string) {
+	*p = Position{}
+	for i := range p.square {
+		p.square[i] = -1
+	}
+	p.epSquare = -1
+	parts := strings.Fields(fen)
+	if len(parts) == 0 {
+		return
+	}
+
+	// 1. Set da pieces
+	ranks := strings.Split(parts[0], "/")
+	for r := 0; r < 8; r++ {
+		rank := 7 - r
+		file := 0
+		for _, char := range ranks[r] {
+			if char >= '1' && char <= '8' {
+				file += int(char - '0')
+			} else {
+				sq := rank*8 + file
+				color := White
+				if char >= 'a' && char <= 'z' {
+					color = Black
+				}
+				pt := -1
+				switch strings.ToLower(string(char)) {
+				case "p":
+					pt = Pawn
+				case "n":
+					pt = Knight
+				case "b":
+					pt = Bishop
+				case "r":
+					pt = Rook
+				case "q":
+					pt = Queen
+				case "k":
+					pt = King
+				}
+				if pt != -1 {
+					p.pieces[color][pt] |= sqBB[sq]
+					p.occupied[color] |= sqBB[sq]
+					p.all |= sqBB[sq]
+					p.square[sq] = (color << 3) | pt
+					p.material[color] += pieceValues[pt]
+					p.psqScore[color] += pst[color][pt][sq]
+					p.psqScoreEG[color] += pstEnd[color][pt][sq]
+					p.hash ^= zobristPiece[color][pt][sq]
+				}
+				file++
+			}
+		}
+	}
+
+	if len(parts) < 2 {
+		return
+	}
+
+	// 2. Set da side to move
+	if parts[1] == "w" {
+		p.side = White
+	} else {
+		p.side = Black
+		p.hash ^= zobristSide
+	}
+
+	if len(parts) < 3 {
+		return
+	}
+
+	// 3. Set da castling
+	if parts[2] != "-" {
+		for _, char := range parts[2] {
+			switch char {
+			case 'K':
+				p.castle |= 1
+				p.hash ^= zobristCastleWK
+			case 'Q':
+				p.castle |= 2
+				p.hash ^= zobristCastleWQ
+			case 'k':
+				p.castle |= 4
+				p.hash ^= zobristCastleBK
+			case 'q':
+				p.castle |= 8
+				p.hash ^= zobristCastleBQ
+			}
+		}
+	}
+
+	if len(parts) < 4 {
+		return
+	}
+
+	// 4. Set da en passant
+	if parts[3] != "-" {
+		file := int(parts[3][0] - 'a')
+		rank := int(parts[3][1] - '1')
+		p.epSquare = rank*8 + file
+		p.hash ^= zobristEP[file]
+	}
+
+	if len(parts) < 5 {
+		return
+	}
+
+	// 5. Set da halfmove clock
+	p.halfmove, _ = strconv.Atoi(parts[4])
+
+	p.historyKeys[0] = p.hash
+	p.historyPly = 0
+	p.lastIrreversible = 0
+
+	p.pawnHash = 0
+	for sq := 0; sq < 64; sq++ {
+		c, pt, ok := p.pieceAt(sq)
+		if ok && pt == Pawn {
+			p.pawnHash ^= zobristPiece[c][Pawn][sq]
+		}
+	}
+	p.kingSq[White] = bits.TrailingZeros64(uint64(p.pieces[White][King]))
+	p.kingSq[Black] = bits.TrailingZeros64(uint64(p.pieces[Black][King]))
+	p.computePhase()
+}
+
+func initLineBB() {
+	for s1 := 0; s1 < 64; s1++ {
+		for s2 := 0; s2 < 64; s2++ {
+			if s1 == s2 {
+				continue
+			}
+			// Orthogonal
+			if (rookAttacksClassical(s1, 0) & sqBB[s2]) != 0 {
+				lineBB[s1][s2] = (rookAttacksClassical(s1, 0) & rookAttacksClassical(s2, 0)) | sqBB[s1] | sqBB[s2]
+			}
+			// Diagonal
+			if (bishopAttacksClassical(s1, 0) & sqBB[s2]) != 0 {
+				lineBB[s1][s2] = (bishopAttacksClassical(s1, 0) & bishopAttacksClassical(s2, 0)) | sqBB[s1] | sqBB[s2]
+			}
+		}
+	}
+}
+
+func (p *Position) getPins(side int) Bitboard {
+	kingSq := p.kingSq[side]
+	if kingSq >= 64 {
+		return 0
+	}
+	them := side ^ 1
+	pinned := Bitboard(0)
+
+	// Orthogonal pinners
+	pinnersR := (p.pieces[them][Rook] | p.pieces[them][Queen]) & rookAttacks(kingSq, 0)
+	for pinnersR != 0 {
+		sq := popLSB(&pinnersR)
+		between := rookAttacks(kingSq, p.all) & rookAttacks(sq, p.all)
+		if bits.OnesCount64(uint64(between&p.occupied[side])) == 1 {
+			pinned |= between & p.occupied[side]
+		}
+	}
+
+	// Diagonal pinners
+	pinnersB := (p.pieces[them][Bishop] | p.pieces[them][Queen]) & bishopAttacks(kingSq, 0)
+	for pinnersB != 0 {
+		sq := popLSB(&pinnersB)
+		between := bishopAttacks(kingSq, p.all) & bishopAttacks(sq, p.all)
+		if bits.OnesCount64(uint64(between&p.occupied[side])) == 1 {
+			pinned |= between & p.occupied[side]
+		}
+	}
+	return pinned
+}
+
+func (p *Position) pieceAt(sq int) (color, piece int, ok bool) {
+	val := p.square[sq]
+	if val < 0 {
+		return 0, 0, false
+	}
+	color = val >> 3
+	piece = val & 7
+	return color, piece, true
+}
+
+func rookAttacks(sq int, occ Bitboard) Bitboard {
+	m := &rookMagics[sq]
+	idx := uint32(((occ & m.mask) * m.magic) >> m.shift)
+	return rookAttackTable[m.offset+idx]
+}
+
+func bishopAttacks(sq int, occ Bitboard) Bitboard {
+	m := &bishopMagics[sq]
+	idx := uint32(((occ & m.mask) * m.magic) >> m.shift)
+	return bishopAttackTable[m.offset+idx]
+}
+
+func (p *Position) isAttacked(sq, bySide int, occ Bitboard) bool {
+	if sq < 0 || sq >= 64 {
+		return false
+	}
+	if pawnAttacks[bySide^1][sq]&p.pieces[bySide][Pawn] != 0 {
+		return true
+	}
+	if knightAttacks[sq]&p.pieces[bySide][Knight] != 0 {
+		return true
+	}
+	if kingAttacks[sq]&p.pieces[bySide][King] != 0 {
+		return true
+	}
+	qu := p.pieces[bySide][Queen]
+	if bishopAttacks(sq, occ)&(p.pieces[bySide][Bishop]|qu) != 0 {
+		return true
+	}
+	return rookAttacks(sq, occ)&(p.pieces[bySide][Rook]|qu) != 0
+}
+
+func (p *Position) inCheck() bool {
+	kingSq := p.kingSq[p.side]
+	if kingSq >= 64 {
+		return false
+	}
+	return p.isAttacked(kingSq, p.side^1, p.all)
+}
+
+/*
+   Move Generation Strategy:
+   Instead of looping over every square, we loop over pieces (Bitboards).
+
+   Example:
+   for bb := knights; bb != 0; {
+       from := popLSB(&bb)         // Get location of a knight
+       attacks := lookup(from)     // Get all target squares
+       valid := attacks & ~us      // Remove friendly fire
+   }
+
+   This _Piece-Centric_ approach is much faster than _Square-Centric_ loops
+   because empty squares are skipped entirely.
+*/
+
+func (p *Position) generateMovesTo(buf []Move, capturesOnly bool) int {
+	i := 0
+	us, them := p.side, p.side^1
+
+	occAll := p.all
+	occUs := p.occupied[us]
+	occThem := p.occupied[them]
+	ep := p.epSquare
+	pawns := p.pieces[us][Pawn]
+	var push, dblPush int
+	var promoRank, dblRank int
+	if us == White {
+		push, dblPush = 8, 16
+		promoRank, dblRank = 6, 1
+	} else {
+		push, dblPush = -8, -16
+		promoRank, dblRank = 1, 6
+	}
+
+	for bb := pawns; bb != 0; {
+		from := popLSB(&bb)
+		to := from + push
+
+		if from>>3 == promoRank {
+			if !capturesOnly && occAll&sqBB[to] == 0 {
+				buf[i] = makeMoves(from, to, FlagPromoQ)
+				i++
+				buf[i] = makeMoves(from, to, FlagPromoR)
+				i++
+				buf[i] = makeMoves(from, to, FlagPromoB)
+				i++
+				buf[i] = makeMoves(from, to, FlagPromoN)
+				i++
+			}
+
+			attacks := pawnAttacks[us][from] & occThem & ^p.pieces[them][King]
+			for att := attacks; att != 0; {
+				to := popLSB(&att)
+				buf[i] = makeMoves(from, to, FlagPromoCQ)
+				i++
+				buf[i] = makeMoves(from, to, FlagPromoCR)
+				i++
+				buf[i] = makeMoves(from, to, FlagPromoCB)
+				i++
+				buf[i] = makeMoves(from, to, FlagPromoCN)
+				i++
+			}
+		} else {
+			if !capturesOnly && occAll&sqBB[to] == 0 {
+				buf[i] = makeMoves(from, to, FlagQuiet)
+				i++
+
+				if from>>3 == dblRank {
+					to2 := from + dblPush
+					if occAll&sqBB[to2] == 0 {
+						buf[i] = makeMoves(from, to2, FlagQuiet)
+						i++
+					}
+				}
+			}
+
+			attacks := pawnAttacks[us][from] & occThem & ^p.pieces[them][King]
+			for att := attacks; att != 0; {
+				to := popLSB(&att)
+				buf[i] = makeMoves(from, to, FlagCapture)
+				i++
+			}
+
+			if ep >= 0 {
+				if pawnAttacks[us][from]&sqBB[ep] != 0 {
+					buf[i] = makeMoves(from, ep, FlagEP)
+					i++
+				}
+			}
+		}
+	}
+
+	for bb := p.pieces[us][Knight]; bb != 0; {
+		from := popLSB(&bb)
+		attacks := knightAttacks[from] & ^occUs & ^p.pieces[them][King]
+		if capturesOnly {
+			attacks &= occThem
+		}
+		for att := attacks; att != 0; {
+			to := popLSB(&att)
+			flag := FlagQuiet
+			if occThem&sqBB[to] != 0 {
+				flag = FlagCapture
+			}
+			buf[i] = makeMoves(from, to, flag)
+			i++
+		}
+	}
+
+	for bb := p.pieces[us][Bishop]; bb != 0; {
+		from := popLSB(&bb)
+		attacks := bishopAttacks(from, occAll) & ^occUs & ^p.pieces[them][King]
+		if capturesOnly {
+			attacks &= occThem
+		}
+		for att := attacks; att != 0; {
+			to := popLSB(&att)
+			flag := FlagQuiet
+			if occThem&sqBB[to] != 0 {
+				flag = FlagCapture
+			}
+			buf[i] = makeMoves(from, to, flag)
+			i++
+		}
+	}
+
+	for bb := p.pieces[us][Rook]; bb != 0; {
+		from := popLSB(&bb)
+		attacks := rookAttacks(from, occAll) & ^occUs & ^p.pieces[them][King]
+		if capturesOnly {
+			attacks &= occThem
+		}
+		for att := attacks; att != 0; {
+			to := popLSB(&att)
+			flag := FlagQuiet
+			if occThem&sqBB[to] != 0 {
+				flag = FlagCapture
+			}
+			buf[i] = makeMoves(from, to, flag)
+			i++
+		}
+	}
+
+	for bb := p.pieces[us][Queen]; bb != 0; {
+		from := popLSB(&bb)
+		attacks := (bishopAttacks(from, occAll) | rookAttacks(from, occAll)) & ^occUs & ^p.pieces[them][King]
+		if capturesOnly {
+			attacks &= occThem
+		}
+		for att := attacks; att != 0; {
+			to := popLSB(&att)
+			flag := FlagQuiet
+			if occThem&sqBB[to] != 0 {
+				flag = FlagCapture
+			}
+			buf[i] = makeMoves(from, to, flag)
+			i++
+		}
+	}
+
+	// da king moves
+	kingSq := p.kingSq[us]
+	if kingSq < 64 {
+		attacks := kingAttacks[kingSq] & ^occUs & ^p.pieces[them][King]
+		if capturesOnly {
+			attacks &= occThem
+		}
+		for att := attacks; att != 0; {
+			to := popLSB(&att)
+			flag := FlagQuiet
+			if (occThem & sqBB[to]) != 0 {
+				flag = FlagCapture
+			}
+			buf[i] = makeMoves(kingSq, to, flag)
+			i++
+		}
+	}
+
+	if !capturesOnly && !p.inCheck() {
+		if us == White {
+			if p.castle&1 != 0 && occAll&0x60 == 0 {
+				buf[i] = makeMoves(4, 6, FlagCastle)
+				i++
+			}
+			if p.castle&2 != 0 && occAll&0x0E == 0 {
+				buf[i] = makeMoves(4, 2, FlagCastle)
+				i++
+			}
+		} else {
+			if p.castle&4 != 0 && occAll&(0x60<<56) == 0 {
+				buf[i] = makeMoves(60, 62, FlagCastle)
+				i++
+			}
+			if p.castle&8 != 0 && occAll&(0x0E<<56) == 0 {
+				buf[i] = makeMoves(60, 58, FlagCastle)
+				i++
+			}
+		}
+	}
+	return i
+}
+
+func (p *Position) isLegal(m Move) bool {
+	from, to := m.from(), m.to()
+	us, them := p.side, p.side^1
+	flags := m.flags()
+	if flags == FlagCastle {
+		if p.isAttacked(from, them, p.all) {
+			return false
+		}
+		if to > from {
+			// King side castle: check squares from+1 and from+2 (e.g., 5 & 6 or 61 & 62)
+			if p.isAttacked(from+1, them, p.all) || p.isAttacked(from+2, them, p.all) {
+				return false
+			}
+		} else {
+			// Queen side castle: check squares from-1 and from-2 (e.g., 3 & 2 or 59 & 58)
+			if p.isAttacked(from-1, them, p.all) || p.isAttacked(from-2, them, p.all) {
+				return false
+			}
+		}
+		return true
+	}
+	pt := p.square[from] & 7
+	fromBB, toBB := sqBB[from], sqBB[to]
+	tP := p.pieces[them][Pawn]
+	tN := p.pieces[them][Knight]
+	tB := p.pieces[them][Bishop]
+	tR := p.pieces[them][Rook]
+	tQ := p.pieces[them][Queen]
+	tK := p.pieces[them][King]
+
+	if m.isCapture() {
+		capSq := to
+		if flags == FlagEP {
+			if us == White {
+				capSq = to - 8
+			} else {
+				capSq = to + 8
+			}
+		}
+		capBB := sqBB[capSq]
+		tP &^= capBB
+		tN &^= capBB
+		tB &^= capBB
+		tR &^= capBB
+		tQ &^= capBB
+		// This is probably redundant but i dont bother testing
+		tK &^= capBB
+	}
+
+	occ2 := p.all&^fromBB | toBB
+	if flags == FlagEP {
+		if us == White {
+			occ2 &^= sqBB[to-8]
+		} else {
+			occ2 &^= sqBB[to+8]
+		}
+	}
+	var kingSq int
+	if pt == King {
+		kingSq = to
+	} else {
+		kingSq = p.kingSq[us]
+	}
+
+	if pawnAttacks[them^1][kingSq]&tP != 0 {
+		return false
+	}
+	if knightAttacks[kingSq]&tN != 0 {
+		return false
+	}
+	if bishopAttacks(kingSq, occ2)&(tB|tQ) != 0 {
+		return false
+	}
+	if rookAttacks(kingSq, occ2)&(tR|tQ) != 0 {
+		return false
+	}
+	if kingAttacks[kingSq]&tK != 0 {
+		return false
+	}
+	return true
+}
+
+func (p *Position) makeMove(m Move) Undo {
+	undo := Undo{
+		castle:           p.castle,
+		epSquare:         p.epSquare,
+		halfmove:         p.halfmove,
+		captured:         -1,
+		lastIrreversible: p.lastIrreversible,
+	}
+
+	from, to, flags := m.from(), m.to(), m.flags()
+	us, them := p.side, p.side^1
+	h := p.hash
+	h ^= zobristSide
+
+	if p.epSquare >= 0 {
+		h ^= zobristEP[p.epSquare%8]
+		p.epSquare = -1
+	}
+
+	movingPiece := p.square[from] & 7
+
+	if flags&FlagCapture != 0 {
+		capSq := to
+		if flags == FlagEP {
+			if us == White {
+				capSq = to - 8
+			} else {
+				capSq = to + 8
+			}
+		}
+		capturedPiece := p.square[capSq] & 7
+		undo.captured = capturedPiece
+
+		if capturedPiece == Rook {
+			switch capSq {
+			case 0:
+				p.castle &^= 2
+			case 7:
+				p.castle &^= 1
+			case 56:
+				p.castle &^= 8
+			case 63:
+				p.castle &^= 4
+			}
+		}
+
+		bb := sqBB[capSq]
+		p.pieces[them][capturedPiece] &^= bb
+		p.occupied[them] &^= bb
+		p.all &^= bb
+		h ^= zobristPiece[them][capturedPiece][capSq]
+		if capturedPiece == Pawn {
+			p.pawnHash ^= zobristPiece[them][Pawn][capSq]
+		}
+		p.material[them] -= pieceValues[capturedPiece]
+		p.phase += piecePhase[capturedPiece]
+		p.psqScore[them] -= pst[them][capturedPiece][capSq]
+		p.psqScoreEG[them] -= pstEnd[them][capturedPiece][capSq]
+		p.square[capSq] = -1
+
+		p.halfmove = 0
+	} else if movingPiece == Pawn {
+		p.halfmove = 0
+	} else {
+		p.halfmove++
+	}
+
+	if flags == FlagCastle {
+		bbFrom := sqBB[from]
+		bbTo := sqBB[to]
+		p.pieces[us][King] &^= bbFrom
+		p.pieces[us][King] |= bbTo
+		p.occupied[us] &^= bbFrom
+		p.occupied[us] |= bbTo
+		p.all &^= bbFrom
+		p.all |= bbTo
+		h ^= zobristPiece[us][King][from] ^ zobristPiece[us][King][to]
+		p.psqScore[us] += pst[us][King][to] - pst[us][King][from]
+		p.psqScoreEG[us] += pstEnd[us][King][to] - pstEnd[us][King][from]
+		p.square[from] = -1
+		p.square[to] = (us << 3) | King
+		p.kingSq[us] = to
+		var rf, rt int
+		if to > from {
+			rf, rt = from+3, from+1
+		} else {
+			rf, rt = from-4, from-1
+		}
+		rfBB := sqBB[rf]
+		rtBB := sqBB[rt]
+		p.pieces[us][Rook] &^= rfBB
+		p.pieces[us][Rook] |= rtBB
+		p.occupied[us] &^= rfBB
+		p.occupied[us] |= rtBB
+		p.all &^= rfBB
+		p.all |= rtBB
+		h ^= zobristPiece[us][Rook][rf] ^ zobristPiece[us][Rook][rt]
+		p.psqScore[us] += pst[us][Rook][rt] - pst[us][Rook][rf]
+		p.psqScoreEG[us] += pstEnd[us][Rook][rt] - pstEnd[us][Rook][rf]
+		p.square[rf] = -1
+		p.square[rt] = (us << 3) | Rook
+
+	} else if flags >= FlagPromoN {
+		bbFrom := sqBB[from]
+		p.pieces[us][Pawn] &^= bbFrom
+		p.occupied[us] &^= bbFrom
+		p.all &^= bbFrom
+		h ^= zobristPiece[us][Pawn][from]
+		p.pawnHash ^= zobristPiece[us][Pawn][from]
+		p.material[us] -= pieceValues[Pawn]
+		p.psqScore[us] -= pst[us][Pawn][from]
+		p.psqScoreEG[us] -= pstEnd[us][Pawn][from]
+		p.square[from] = -1
+
+		promoType := (flags & 3) + Knight
+		bbTo := sqBB[to]
+		p.pieces[us][promoType] |= bbTo
+		p.occupied[us] |= bbTo
+		p.all |= bbTo
+		h ^= zobristPiece[us][promoType][to]
+		// This also is probably redundant
+		if promoType == Pawn {
+			p.pawnHash ^= zobristPiece[us][Pawn][to]
+		}
+		p.material[us] += pieceValues[promoType]
+		p.phase -= piecePhase[promoType]
+		p.psqScore[us] += pst[us][promoType][to]
+		p.psqScoreEG[us] += pstEnd[us][promoType][to]
+		p.square[to] = (us << 3) | promoType
+
+	} else {
+		bbFrom := sqBB[from]
+		bbTo := sqBB[to]
+		p.pieces[us][movingPiece] &^= bbFrom
+		p.pieces[us][movingPiece] |= bbTo
+		p.occupied[us] &^= bbFrom
+		p.occupied[us] |= bbTo
+		p.all &^= bbFrom
+		p.all |= bbTo
+		h ^= zobristPiece[us][movingPiece][from] ^ zobristPiece[us][movingPiece][to]
+		if movingPiece == Pawn {
+			p.pawnHash ^= zobristPiece[us][Pawn][from] ^ zobristPiece[us][Pawn][to]
+		}
+		p.psqScore[us] += pst[us][movingPiece][to] - pst[us][movingPiece][from]
+		p.psqScoreEG[us] += pstEnd[us][movingPiece][to] - pstEnd[us][movingPiece][from]
+		p.square[from] = -1
+		p.square[to] = (us << 3) | movingPiece
+		if movingPiece == King {
+			p.kingSq[us] = to
+		}
+
+		if movingPiece == Pawn && abs(to-from) == 16 {
+			p.epSquare = (from + to) / 2
+			h ^= zobristEP[p.epSquare%8]
+		}
+	}
+
+	switch movingPiece {
+	case King:
+		if us == White {
+			p.castle &^= 3
+		} else {
+			p.castle &^= 12
+		}
+	case Rook:
+		switch from {
+		case 0:
+			p.castle &^= 2
+		case 7:
+			p.castle &^= 1
+		case 56:
+			p.castle &^= 8
+		case 63:
+			p.castle &^= 4
+		}
+	}
+
+	changedCastle := undo.castle ^ p.castle
+	if changedCastle&1 != 0 {
+		h ^= zobristCastleWK
+	}
+	if changedCastle&2 != 0 {
+		h ^= zobristCastleWQ
+	}
+	if changedCastle&4 != 0 {
+		h ^= zobristCastleBK
+	}
+	if changedCastle&8 != 0 {
+		h ^= zobristCastleBQ
+	}
+	p.side ^= 1
+	irreversible := (undo.captured >= 0) || (movingPiece == Pawn)
+	p.historyPly++
+	p.historyKeys[p.historyPly] = h
+
+	if irreversible {
+		p.lastIrreversible = p.historyPly
+	}
+	p.hash = h
+	return undo
+}
+
+func (p *Position) unmakeMove(m Move, undo Undo) {
+	from, to, flags := m.from(), m.to(), m.flags()
+	us := p.side ^ 1
+	them := p.side
+	p.historyPly--
+	p.lastIrreversible = undo.lastIrreversible
+	p.side = us
+	p.castle = undo.castle
+	p.epSquare = undo.epSquare
+	p.halfmove = undo.halfmove
+
+	if flags == FlagCastle {
+		bbFrom := sqBB[to]
+		bbTo := sqBB[from]
+		p.pieces[us][King] &^= bbFrom
+		p.pieces[us][King] |= bbTo
+		p.occupied[us] &^= bbFrom
+		p.occupied[us] |= bbTo
+		p.all &^= bbFrom
+		p.all |= bbTo
+		p.psqScore[us] += pst[us][King][from] - pst[us][King][to]
+		p.psqScoreEG[us] += pstEnd[us][King][from] - pstEnd[us][King][to]
+		p.square[to] = -1
+		p.square[from] = (us << 3) | King
+		p.kingSq[us] = from
+
+		var rf, rt int
+		if to > from {
+			rf, rt = from+1, from+3
+		} else {
+			rf, rt = from-1, from-4
+		}
+
+		rfBB := sqBB[rf]
+		rtBB := sqBB[rt]
+		p.pieces[us][Rook] &^= rfBB
+		p.pieces[us][Rook] |= rtBB
+		p.occupied[us] &^= rfBB
+		p.occupied[us] |= rtBB
+		p.all &^= rfBB
+		p.all |= rtBB
+		p.psqScore[us] += pst[us][Rook][rt] - pst[us][Rook][rf]
+		p.psqScoreEG[us] += pstEnd[us][Rook][rt] - pstEnd[us][Rook][rf]
+		p.square[rf] = -1
+		p.square[rt] = (us << 3) | Rook
+
+	} else if flags >= FlagPromoN {
+		promoType := (flags & 3) + Knight
+		bbTo := sqBB[to]
+		p.pieces[us][promoType] &^= bbTo
+		p.occupied[us] &^= bbTo
+		p.all &^= bbTo
+		p.material[us] -= pieceValues[promoType]
+		p.psqScore[us] -= pst[us][promoType][to]
+		p.psqScoreEG[us] -= pstEnd[us][promoType][to]
+		p.phase += piecePhase[promoType]
+		p.square[to] = -1
+		bbFrom := sqBB[from]
+		p.pieces[us][Pawn] |= bbFrom
+		p.occupied[us] |= bbFrom
+		p.all |= bbFrom
+		p.material[us] += pieceValues[Pawn]
+		p.psqScore[us] += pst[us][Pawn][from]
+		p.psqScoreEG[us] += pstEnd[us][Pawn][from]
+		p.square[from] = (us << 3) | Pawn
+		p.pawnHash ^= zobristPiece[us][Pawn][from]
+
+	} else {
+		movingPt := p.square[to] & 7
+		bbFrom := sqBB[to]
+		bbTo := sqBB[from]
+		p.pieces[us][movingPt] &^= bbFrom
+		p.pieces[us][movingPt] |= bbTo
+		p.occupied[us] &^= bbFrom
+		p.occupied[us] |= bbTo
+		p.all &^= bbFrom
+		p.all |= bbTo
+		p.psqScore[us] += pst[us][movingPt][from] - pst[us][movingPt][to]
+		p.psqScoreEG[us] += pstEnd[us][movingPt][from] - pstEnd[us][movingPt][to]
+		p.square[to] = -1
+		p.square[from] = (us << 3) | movingPt
+		// Update da kingsq
+		if movingPt == King {
+			p.kingSq[us] = from
+		}
+		if movingPt == Pawn {
+			p.pawnHash ^= zobristPiece[us][Pawn][from] ^ zobristPiece[us][Pawn][to]
+		}
+	}
+
+	if undo.captured >= 0 {
+		capSq := to
+		if flags == FlagEP {
+			if us == White {
+				capSq = to - 8
+			} else {
+				capSq = to + 8
+			}
+		}
+		bb := sqBB[capSq]
+		capturedPiece := undo.captured
+		p.pieces[them][capturedPiece] |= bb
+		p.occupied[them] |= bb
+		p.all |= bb
+		p.material[them] += pieceValues[capturedPiece]
+		p.psqScore[them] += pst[them][capturedPiece][capSq]
+		p.psqScoreEG[them] += pstEnd[them][capturedPiece][capSq]
+		p.square[capSq] = (them << 3) | capturedPiece
+		p.phase -= piecePhase[capturedPiece]
+		if capturedPiece == Pawn {
+			p.pawnHash ^= zobristPiece[them][Pawn][capSq]
+		}
+	}
+	p.hash = p.historyKeys[p.historyPly]
+}
+
+func (p *Position) makeNullMove() Undo {
+	undo := Undo{
+		epSquare: p.epSquare,
+		halfmove: p.halfmove,
+	}
+
+	p.side ^= 1
+	p.hash ^= zobristSide
+
+	if epFile := p.epSquare; epFile != -1 {
+		p.hash ^= zobristEP[epFile%8]
+		p.epSquare = -1
+	}
+	p.halfmove++
+	p.historyPly++
+	p.historyKeys[p.historyPly] = p.hash
+	return undo
+}
+
+func (p *Position) unmakeNullMove(undo Undo) {
+	p.historyPly--
+	p.hash = p.historyKeys[p.historyPly]
+	p.epSquare = undo.epSquare
+	p.halfmove = undo.halfmove
+	p.side ^= 1
+}
+
+func (p *Position) evalBishopPair() int {
+	score := 0
+	pawnCount := bits.OnesCount64(uint64(p.pieces[White][Pawn] | p.pieces[Black][Pawn]))
+	// Bishop pair is worth more in open positions (less pawns)
+	dynamicBonus := bonusBishopPair + (16-pawnCount)*2
+
+	if bits.OnesCount64(uint64(p.pieces[White][Bishop])) >= 2 {
+		score += dynamicBonus
+	}
+	if bits.OnesCount64(uint64(p.pieces[Black][Bishop])) >= 2 {
+		score -= dynamicBonus
+	}
+	return score
+}
+
+func (p *Position) see(m Move, pins [2]Bitboard, kingSq [2]int) int {
+	from, to := m.from(), m.to()
+	piece := p.square[from] & 7
+	flags := m.flags()
+	gain0 := 0
+	if flags == FlagEP {
+		gain0 = pieceValues[Pawn]
+	} else if p.square[to] != -1 {
+		gain0 = pieceValues[p.square[to]&7]
+	}
+	pieceAfter := piece
+	if m.isPromo() {
+		pieceAfter = m.promoType()
+	}
+	return p.seeIterative(from, to, pieceAfter, gain0, pins, kingSq)
+}
+
+func (p *Position) seeIterative(from, to, pieceAfterFirst, gain0 int, pins [2]Bitboard, kingSq [2]int) int {
+	var gain [32]int
+	d := 0
+	occ := p.all
+	att := p.getSEEAttackers(to, occ)
+
+	// First move (the move m passed to see)
+	us := p.side
+	gain[d] = gain0
+	piece := pieceAfterFirst
+
+	att &^= sqBB[from]
+	occ &^= sqBB[from]
+	// Any move can uncover X-ray sliders
+	att |= p.getXrayAttackers(to, occ)
+
+	us ^= 1
+	for {
+		d++
+		myAtt := att & p.occupied[us]
+		if myAtt == 0 {
+			break
+		}
+
+		var pt int
+		var attSq int
+		found := false
+		// Find smallest attacker for 'us'
+		lvaOrder := [6]int{Pawn, Bishop, Knight, Rook, Queen, King}
+		for _, pType := range lvaOrder {
+			subset := myAtt & p.pieces[us][pType]
+			if subset != 0 {
+				for subset != 0 {
+					s := popLSB(&subset)
+					// If the attacker is pinned, it can only capture if the target 'to' is on the pin ray
+					if (sqBB[s] & pins[us]) != 0 {
+						if (lineBB[kingSq[us]][s] & sqBB[to]) == 0 {
+							continue
+						}
+					}
+					pt = pType
+					attSq = s
+					found = true
+					break
+				}
+				if found {
+					break
+				}
+			}
+		}
+
+		if !found {
+			break
+		}
+
+		gain[d] = pieceValues[piece] - gain[d-1]
+		piece = pt
+		att &^= sqBB[attSq]
+		occ &^= sqBB[attSq]
+		att |= p.getXrayAttackers(to, occ)
+		us ^= 1
+	}
+
+	for d--; d > 0; d-- {
+		gain[d-1] = -max(-gain[d-1], gain[d])
+	}
+	return gain[0]
+}
+
+func (p *Position) getSEEAttackers(sq int, occ Bitboard) Bitboard {
+	return (pawnAttacks[White][sq] & p.pieces[Black][Pawn] & occ) |
+		(pawnAttacks[Black][sq] & p.pieces[White][Pawn] & occ) |
+		(knightAttacks[sq] & (p.pieces[White][Knight] | p.pieces[Black][Knight]) & occ) |
+		(kingAttacks[sq] & (p.pieces[White][King] | p.pieces[Black][King]) & occ) |
+		(bishopAttacks(sq, occ) & (p.pieces[White][Bishop] | p.pieces[Black][Bishop] | p.pieces[White][Queen] | p.pieces[Black][Queen]) & occ) |
+		(rookAttacks(sq, occ) & (p.pieces[White][Rook] | p.pieces[Black][Rook] | p.pieces[White][Queen] | p.pieces[Black][Queen]) & occ)
+}
+
+func (p *Position) getXrayAttackers(sq int, occ Bitboard) Bitboard {
+	bishops := (p.pieces[White][Bishop] | p.pieces[Black][Bishop] | p.pieces[White][Queen] | p.pieces[Black][Queen]) & occ
+	rooks := (p.pieces[White][Rook] | p.pieces[Black][Rook] | p.pieces[White][Queen] | p.pieces[Black][Queen]) & occ
+	return (bishopAttacks(sq, occ) & bishops) | (rookAttacks(sq, occ) & rooks)
+}
+
+func updateHistory(side, from, to, bonus int) {
+	clampedBonus := bonus
+	if clampedBonus > 400 {
+		clampedBonus = 400
+	} else if clampedBonus < -400 {
+		clampedBonus = -400
+	}
+	history[side][from][to] += clampedBonus - (history[side][from][to] * abs(clampedBonus) / MaxHistory)
+}
+
+func (p *Position) evalPawns() (mg, eg int) {
+	idx := p.pawnHash % uint64(pawnTableSize)
+	entry := &pawnTable[idx]
+	if entry.key == p.pawnHash {
+		return entry.mgScore, entry.egScore
+	}
+
+	mg, eg = 0, 0
+	whitePawns := p.pieces[White][Pawn]
+	blackPawns := p.pieces[Black][Pawn]
+
+	// what pawns
+	for bb := whitePawns; bb != 0; {
+		sq := popLSB(&bb)
+		file := sq % 8
+		rank := sq / 8
+
+		// Doubled
+		if (whitePawns&(Bitboard(0x0101010101010101)<<file)) & ^sqBB[sq] != 0 {
+			mg -= doubledPawnPenalty
+			eg -= doubledPawnPenalty
+		}
+
+		// Isolated
+		isolated := true
+		if file > 0 && (whitePawns&(Bitboard(0x0101010101010101)<<(file-1))) != 0 {
+			isolated = false
+		}
+		if file < 7 && (whitePawns&(Bitboard(0x0101010101010101)<<(file+1))) != 0 {
+			isolated = false
+		}
+		if isolated {
+			mg -= isolatedPawnPenalty
+			eg -= isolatedPawnPenalty
+		}
+
+		// Passed
+		mask := Bitboard(0)
+		for r := rank + 1; r < 8; r++ {
+			mask |= sqBB[r*8+file]
+			if file > 0 {
+				mask |= sqBB[r*8+file-1]
+			}
+			if file < 7 {
+				mask |= sqBB[r*8+file+1]
+			}
+		}
+		if (blackPawns & mask) == 0 {
+			mg += passedPawnBonus[rank] / 2
+			eg += passedPawnBonus[rank]
+		}
+	}
+
+	// Blik pawns
+	for bb := blackPawns; bb != 0; {
+		sq := popLSB(&bb)
+		file := sq % 8
+		rank := sq / 8
+		revRank := 7 - rank
+
+		// Doubled
+		if (blackPawns&(Bitboard(0x0101010101010101)<<file)) & ^sqBB[sq] != 0 {
+			mg += doubledPawnPenalty
+			eg += doubledPawnPenalty
+		}
+
+		// Isolated
+		isolated := true
+		if file > 0 && (blackPawns&(Bitboard(0x0101010101010101)<<(file-1))) != 0 {
+			isolated = false
+		}
+		if file < 7 && (blackPawns&(Bitboard(0x0101010101010101)<<(file+1))) != 0 {
+			isolated = false
+		}
+		if isolated {
+			mg += isolatedPawnPenalty
+			eg += isolatedPawnPenalty
+		}
+
+		// Passed
+		mask := Bitboard(0)
+		for r := rank - 1; r >= 0; r-- {
+			mask |= sqBB[r*8+file]
+			if file > 0 {
+				mask |= sqBB[r*8+file-1]
+			}
+			if file < 7 {
+				mask |= sqBB[r*8+file+1]
+			}
+		}
+		if (whitePawns & mask) == 0 {
+			mg -= passedPawnBonus[revRank] / 2
+			eg -= passedPawnBonus[revRank]
+		}
+	}
+
+	entry.key = p.pawnHash
+	entry.mgScore = mg
+	entry.egScore = eg
+
+	return mg, eg
+}
+
+func (p *Position) evalMobility() (mg, eg int) {
+	mg, eg = 0, 0
+	occupied := p.all
+	dangerW := ((p.pieces[Black][Pawn] & ^Bitboard(0x8080808080808080)) >> 7) | ((p.pieces[Black][Pawn] & ^Bitboard(0x0101010101010101)) >> 9)
+	dangerB := ((p.pieces[White][Pawn] & ^Bitboard(0x0101010101010101)) << 7) | ((p.pieces[White][Pawn] & ^Bitboard(0x8080808080808080)) << 9)
+
+	// What mobility
+	for bb := p.pieces[White][Knight]; bb != 0; {
+		sq := popLSB(&bb)
+		attacks := knightAttacks[sq] & ^p.occupied[White] & ^dangerW
+		cnt := bits.OnesCount64(uint64(attacks))
+		mg += mobilityBonus[0][min(cnt, len(mobilityBonus[0])-1)]
+		eg += mobilityBonus[0][min(cnt, len(mobilityBonus[0])-1)]
+	}
+	for bb := p.pieces[White][Bishop]; bb != 0; {
+		sq := popLSB(&bb)
+		attacks := bishopAttacks(sq, occupied) & ^p.occupied[White] & ^dangerW
+		cnt := bits.OnesCount64(uint64(attacks))
+		mg += mobilityBonus[1][min(cnt, len(mobilityBonus[1])-1)]
+		eg += mobilityBonus[1][min(cnt, len(mobilityBonus[1])-1)]
+	}
+	for bb := p.pieces[White][Rook]; bb != 0; {
+		sq := popLSB(&bb)
+		attacks := rookAttacks(sq, occupied) & ^p.occupied[White] & ^dangerW
+		cnt := bits.OnesCount64(uint64(attacks))
+		mg += mobilityBonus[2][min(cnt, len(mobilityBonus[2])-1)]
+		eg += mobilityBonus[2][min(cnt, len(mobilityBonus[2])-1)]
+	}
+	for bb := p.pieces[White][Queen]; bb != 0; {
+		sq := popLSB(&bb)
+		attacks := (bishopAttacks(sq, occupied) | rookAttacks(sq, occupied)) & ^p.occupied[White] & ^dangerW
+		cnt := bits.OnesCount64(uint64(attacks))
+		mg += mobilityBonus[3][min(cnt, len(mobilityBonus[3])-1)]
+		eg += mobilityBonus[3][min(cnt, len(mobilityBonus[3])-1)]
+	}
+
+	// Blik mobility
+	for bb := p.pieces[Black][Knight]; bb != 0; {
+		sq := popLSB(&bb)
+		attacks := knightAttacks[sq] & ^p.occupied[Black] & ^dangerB
+		cnt := bits.OnesCount64(uint64(attacks))
+		mg -= mobilityBonus[0][min(cnt, len(mobilityBonus[0])-1)]
+		eg -= mobilityBonus[0][min(cnt, len(mobilityBonus[0])-1)]
+	}
+	for bb := p.pieces[Black][Bishop]; bb != 0; {
+		sq := popLSB(&bb)
+		attacks := bishopAttacks(sq, occupied) & ^p.occupied[Black] & ^dangerB
+		cnt := bits.OnesCount64(uint64(attacks))
+		mg -= mobilityBonus[1][min(cnt, len(mobilityBonus[1])-1)]
+		eg -= mobilityBonus[1][min(cnt, len(mobilityBonus[1])-1)]
+	}
+	for bb := p.pieces[Black][Rook]; bb != 0; {
+		sq := popLSB(&bb)
+		attacks := rookAttacks(sq, occupied) & ^p.occupied[Black] & ^dangerB
+		cnt := bits.OnesCount64(uint64(attacks))
+		mg -= mobilityBonus[2][min(cnt, len(mobilityBonus[2])-1)]
+		eg -= mobilityBonus[2][min(cnt, len(mobilityBonus[2])-1)]
+	}
+	for bb := p.pieces[Black][Queen]; bb != 0; {
+		sq := popLSB(&bb)
+		attacks := (bishopAttacks(sq, occupied) | rookAttacks(sq, occupied)) & ^p.occupied[Black] & ^dangerB
+		cnt := bits.OnesCount64(uint64(attacks))
+		mg -= mobilityBonus[3][min(cnt, len(mobilityBonus[3])-1)]
+		eg -= mobilityBonus[3][min(cnt, len(mobilityBonus[3])-1)]
+	}
+
+	return mg, eg
+}
+
+func (p *Position) evalKingSafety() int {
+	mg := 0
+	whiteKingSq := p.kingSq[White]
+	blackKingSq := p.kingSq[Black]
+
+	if whiteKingSq < 64 {
+		zone := kingZoneMask[whiteKingSq]
+		attackers := 0
+		attackUnits := 0
+		for pt := Knight; pt <= Queen; pt++ {
+			bb := p.pieces[Black][pt]
+			for bb != 0 {
+				sq := popLSB(&bb)
+				var attacks Bitboard
+				switch pt {
+				case Knight:
+					attacks = knightAttacks[sq]
+				case Bishop:
+					attacks = bishopAttacks(sq, p.all)
+				case Rook:
+					attacks = rookAttacks(sq, p.all)
+				case Queen:
+					attacks = bishopAttacks(sq, p.all) | rookAttacks(sq, p.all)
+				}
+				if attacks&zone != 0 {
+					attackers++
+					attackUnits += kingAttackerWeight[pt]
+				}
+			}
+		}
+		if attackers > 1 {
+			mg -= (attackUnits * attackUnits)
+		}
+		// Pawn shield
+		mg += p.evalPawnShield(White, whiteKingSq)
+	}
+
+	if blackKingSq < 64 {
+		zone := kingZoneMask[blackKingSq]
+		attackers := 0
+		attackUnits := 0
+		for pt := Knight; pt <= Queen; pt++ {
+			bb := p.pieces[White][pt]
+			for bb != 0 {
+				sq := popLSB(&bb)
+				var attacks Bitboard
+				switch pt {
+				case Knight:
+					attacks = knightAttacks[sq]
+				case Bishop:
+					attacks = bishopAttacks(sq, p.all)
+				case Rook:
+					attacks = rookAttacks(sq, p.all)
+				case Queen:
+					attacks = bishopAttacks(sq, p.all) | rookAttacks(sq, p.all)
+				}
+				if attacks&zone != 0 {
+					attackers++
+					attackUnits += kingAttackerWeight[pt]
+				}
+			}
+		}
+		if attackers > 1 {
+			mg += (attackUnits * attackUnits)
+		}
+		// Pawn shield
+		mg -= p.evalPawnShield(Black, blackKingSq)
+	}
+
+	return mg
+}
+
+func (p *Position) evalPawnShield(side int, kingSq int) int {
+	score := 0
+	r, f := kingSq/8, kingSq%8
+	pawns := p.pieces[side][Pawn]
+
+	if side == White {
+		// Only if king is on back rank
+		if r <= 2 {
+			fStart := max(0, f-1)
+			fEnd := min(7, f+1)
+			for nf := fStart; nf <= fEnd; nf++ {
+				if (pawns & sqBB[(r+1)*8+nf]) != 0 {
+					score += bonusPawnShield
+				}
+				if (pawns & sqBB[(r+2)*8+nf]) != 0 {
+					score += bonusPawnShield
+				}
+			}
+		}
+	} else {
+		if r >= 5 {
+			fStart := max(0, f-1)
+			fEnd := min(7, f+1)
+			for nf := fStart; nf <= fEnd; nf++ {
+				if (pawns & sqBB[(r-1)*8+nf]) != 0 {
+					score += bonusPawnShield
+				}
+				if (pawns & sqBB[(r-2)*8+nf]) != 0 {
+					score += bonusPawnShield
+				}
+			}
+		}
+	}
+	return score
+}
+
+func (p *Position) evalPawnStorm() int {
+	score := 0
+	whiteKingSq := p.kingSq[White]
+	blackKingSq := p.kingSq[Black]
+
+	if whiteKingSq < 64 {
+		kf := whiteKingSq % 8
+		for bb := p.pieces[Black][Pawn]; bb != 0; {
+			sq := popLSB(&bb)
+			if abs(sq%8-kf) <= 1 {
+				dist := (sq / 8) - (whiteKingSq / 8)
+				if dist > 0 {
+					score -= penaltyPawnStorm * (6 - dist)
+				}
+			}
+		}
+	}
+
+	if blackKingSq < 64 {
+		kf := blackKingSq % 8
+		for bb := p.pieces[White][Pawn]; bb != 0; {
+			sq := popLSB(&bb)
+			if abs(sq%8-kf) <= 1 {
+				dist := (blackKingSq / 8) - (sq / 8)
+				if dist > 0 {
+					score += penaltyPawnStorm * (6 - dist)
+				}
+			}
+		}
+	}
+
+	return score
+}
+
+func (p *Position) evalOutposts() (mg, eg int) {
+	mg, eg = 0, 0
+	// Knight and Bishop outposts
+	for side := White; side <= Black; side++ {
+		enemy := side ^ 1
+		for _, pt := range []int{Knight, Bishop} {
+			for bb := p.pieces[side][pt]; bb != 0; {
+				sq := popLSB(&bb)
+				r, f := sq/8, sq%8
+
+				// Outpost range
+				if (side == White && r >= 3 && r <= 5) || (side == Black && r >= 2 && r <= 4) {
+					// Check for pawn support (aww)
+					if (pawnAttacks[side^1][sq] & p.pieces[side][Pawn]) != 0 {
+						// Check if can be attacked by enemy pawn that hasn't passed this rank
+						enemyPawns := p.pieces[enemy][Pawn]
+						// Use bit mask for faaasst check
+						var attackMask Bitboard
+						if side == White {
+							rankMask := (^Bitboard(0)) << ((r + 1) * 8)
+							if f > 0 {
+								attackMask |= (Bitboard(0x0101010101010101) << (f - 1)) & rankMask
+							}
+							if f < 7 {
+								attackMask |= (Bitboard(0x0101010101010101) << (f + 1)) & rankMask
+							}
+						} else {
+							rankMask := (^Bitboard(0)) >> ((7 - r + 1) * 8)
+							if f > 0 {
+								attackMask |= (Bitboard(0x0101010101010101) << (f - 1)) & rankMask
+							}
+							if f < 7 {
+								attackMask |= (Bitboard(0x0101010101010101) << (f + 1)) & rankMask
+							}
+						}
+
+						if (enemyPawns & attackMask) == 0 {
+							bonus := bonusKnightOutpost
+							if pt == Bishop {
+								bonus /= 2
+							}
+							if side == White {
+								mg += bonus
+								eg += bonus / 2
+							} else {
+								mg -= bonus
+								eg -= bonus / 2
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	return mg, eg
+}
+
+func (p *Position) evalTropism() int {
+	score := 0
+	whiteKingSq := p.kingSq[White]
+	blackKingSq := p.kingSq[Black]
+
+	if whiteKingSq < 64 {
+		wr, wf := whiteKingSq/8, whiteKingSq%8
+		attackers := p.occupied[Black] &^ (p.pieces[Black][Pawn] | p.pieces[Black][King])
+		for attackers != 0 {
+			sq := popLSB(&attackers)
+			dist := abs(sq/8-wr) + abs(sq%8-wf)
+			score -= penaltyKingTropism * (14 - dist)
+		}
+	}
+
+	if blackKingSq < 64 {
+		br, bf := blackKingSq/8, blackKingSq%8
+		attackers := p.occupied[White] &^ (p.pieces[White][Pawn] | p.pieces[White][King])
+		for attackers != 0 {
+			sq := popLSB(&attackers)
+			dist := abs(sq/8-br) + abs(sq%8-bf)
+			score += penaltyKingTropism * (14 - dist)
+		}
+	}
+
+	return score
+}
+
+func (p *Position) evalRooksOnFiles() int {
+	score := 0
+	whiteKingSq := p.kingSq[White]
+	blackKingSq := p.kingSq[Black]
+
+	for bb := p.pieces[White][Rook]; bb != 0; {
+		sq := popLSB(&bb)
+		file := sq % 8
+		rank := sq / 8
+		fileBB := Bitboard(0x0101010101010101) << file
+		if (p.pieces[White][Pawn] & fileBB) == 0 {
+			if (p.pieces[Black][Pawn] & fileBB) == 0 {
+				score += bonusRookOpenFile
+			} else {
+				score += bonusRookSemiOpenFile
+			}
+		}
+		if rank == 6 {
+			if blackKingSq >= 56 {
+				score += bonusRookOn7th
+			}
+		}
+	}
+
+	for bb := p.pieces[Black][Rook]; bb != 0; {
+		sq := popLSB(&bb)
+		file := sq % 8
+		rank := sq / 8
+		fileBB := Bitboard(0x0101010101010101) << file
+		if (p.pieces[Black][Pawn] & fileBB) == 0 {
+			if (p.pieces[White][Pawn] & fileBB) == 0 {
+				score -= bonusRookOpenFile
+			} else {
+				score -= bonusRookSemiOpenFile
+			}
+		}
+		if rank == 1 {
+			if whiteKingSq <= 7 {
+				score -= bonusRookOn7th
+			}
+		}
+	}
+	return score
+}
+
+// Hard coded Traps, i have no idea if good or not
+func (p *Position) evalTrappedPieces() int {
+	score := 0
+	// White Trapped Bishop
+	// Bishop on c1, pawn on d2
+	if (p.pieces[White][Bishop]&sqBB[2]) != 0 && (p.pieces[White][Pawn]&sqBB[11]) != 0 {
+		score -= penaltyTrappedBishop
+	}
+	// Bishop on f1, pawn on e2
+	if (p.pieces[White][Bishop]&sqBB[5]) != 0 && (p.pieces[White][Pawn]&sqBB[12]) != 0 {
+		score -= penaltyTrappedBishop
+	}
+	// Black Trapped Bishop
+	// Bishop on c8, pawn on d7
+	if (p.pieces[Black][Bishop]&sqBB[58]) != 0 && (p.pieces[Black][Pawn]&sqBB[51]) != 0 {
+		score += penaltyTrappedBishop
+	}
+	// Bishop on f8, pawn on e7
+	if (p.pieces[Black][Bishop]&sqBB[61]) != 0 && (p.pieces[Black][Pawn]&sqBB[52]) != 0 {
+		score += penaltyTrappedBishop
+	}
+
+	// White Trapped Rook
+	// Rook on a1, king on b1
+	if (p.pieces[White][Rook]&sqBB[0]) != 0 && (p.pieces[White][King]&sqBB[1]) != 0 {
+		score -= penaltyTrappedRook
+	}
+	// Rook on h1, king on g1
+	if (p.pieces[White][Rook]&sqBB[7]) != 0 && (p.pieces[White][King]&sqBB[6]) != 0 {
+		score -= penaltyTrappedRook
+	}
+	// Black Trapped Rook
+	// Rook on a8, king on b8
+	if (p.pieces[Black][Rook]&sqBB[56]) != 0 && (p.pieces[Black][King]&sqBB[57]) != 0 {
+		score += penaltyTrappedRook
+	}
+	// Rook on h8, king on g8
+	if (p.pieces[Black][Rook]&sqBB[63]) != 0 && (p.pieces[Black][King]&sqBB[62]) != 0 {
+		score += penaltyTrappedRook
+	}
+
+	return score
+}
+
+func (p *Position) evaluate() int {
+	a := p.material[White] - p.material[Black]
+	b := p.psqScore[White] - p.psqScore[Black]
+	c := p.psqScoreEG[White] - p.psqScoreEG[Black]
+
+	mgScore := a + b
+	egScore := a + c
+
+	// Add Pawn Structure
+	pawnMG, pawnEG := p.evalPawns()
+	mgScore += pawnMG
+	egScore += pawnEG
+
+	// Add Mobility
+	mobilityMG, mobilityEG := p.evalMobility()
+	mgScore += mobilityMG
+	egScore += mobilityEG
+
+	// Add King Safety
+	mgScore += p.evalKingSafety()
+	mgScore += p.evalTropism()
+	mgScore += p.evalPawnStorm()
+
+	// Add Outposts
+	outpostMG, outpostEG := p.evalOutposts()
+	mgScore += outpostMG
+	egScore += outpostEG
+
+	// Add Bishop Pair
+	bp := p.evalBishopPair()
+	mgScore += bp
+	egScore += bp
+
+	// Add Rooks on Files
+	rof := p.evalRooksOnFiles()
+	mgScore += rof
+	egScore += rof
+
+	// Add Trapped Pieces
+	trapped := p.evalTrappedPieces()
+	mgScore += trapped
+
+	// Tempo
+	tempoMG, tempoEG := 0, 0
+	if p.side == White {
+		tempoMG, tempoEG = 20, 0
+	} else {
+		tempoMG, tempoEG = -20, 0
+	}
+	mgScore += tempoMG
+	egScore += tempoEG
+	ph := p.phase
+	if ph < 0 {
+		ph = 0
+	}
+	phaseScaled := ((totalPhase-ph)*PhaseScale + totalPhase/2) / totalPhase
+	score := egScore + ((mgScore-egScore)*phaseScaled)/PhaseScale
+
+	if p.side == Black {
+		return -score
+	}
+	return score
+}
+
+/*
+  ----------------------------------------------------------------------------------
+   MOVE ORDERING
+  ----------------------------------------------------------------------------------
+   To prune the search tree effectively, we must search the best moves first.
+
+   Sorting Priority List:
+   1. Hash Move      --> The best move found at the previous depth (da best)
+   2. Promotions     --> Queen promotions are tasty
+   3. Good Captures  --> Positive SEE captures sorted via MVV-LVA
+   4. Killer Moves   --> Quiet moves that caused a catoff in a sibling node
+   5. Countermoves   --> Moves that historically responded well to the previous move (arguments?)
+   6. History/PST    --> Moves that have been good in this game or improve PST position
+*/
+
+func clearHeuristics() {
+	for i := range history {
+		for j := range history[i] {
+			for k := range history[i][j] {
+				history[i][j][k] = 0
+			}
+		}
+	}
+	for i := range countermoves {
+		for j := range countermoves[i] {
+			for k := range countermoves[i][j] {
+				countermoves[i][j][k] = 0
+			}
+		}
+	}
+}
+
+func (p *Position) orderMoves(moves []Move, bestMove Move, killer1, killer2 Move, prevMove Move) []Move {
+	n := len(moves)
+	if n == 0 {
+		return moves
+	}
+	var stackScores [256]int
+	scores := stackScores[:n]
+
+	var pins [2]Bitboard
+	var ksq [2]int
+	pinsComputed := false
+
+	for i := 0; i < n; i++ {
+		m := moves[i]
+		score := 0
+		if m == bestMove {
+			score = scoreHash
+		} else if m.isPromo() {
+			score = scorePromoBase + pieceValues[m.promoType()]
+		} else if m.isCapture() {
+			if !pinsComputed {
+				pins = [2]Bitboard{p.getPins(White), p.getPins(Black)}
+				ksq = p.kingSq
+				pinsComputed = true
+			}
+			seeVal := p.see(m, pins, ksq)
+			if seeVal >= 0 {
+				victim := Pawn
+				if vt := p.square[m.to()]; vt != -1 {
+					victim = vt & 7
+				}
+				score = scoreCaptureBase + seeVal + pieceValues[victim]*MVVLVAWeight - pieceValues[p.square[m.from()]&7]
+			} else {
+				// Bad
+				score = seeVal
+			}
+		} else {
+			switch m {
+			case killer1:
+				score = scoreKiller1
+			case killer2:
+				score = scoreKiller2
+			default:
+				us := p.side
+				from, to := m.from(), m.to()
+				pt := p.square[from] & 7
+				score = history[us][from][to]
+				if prevMove != 0 && m == countermoves[us][prevMove.from()][prevMove.to()] {
+					// Countermove bonus
+					score += 20000
+				}
+				// PST bonus for moves without history
+				score += pst[us][pt][to] - pst[us][pt][from]
+			}
+		}
+		scores[i] = score
+	}
+
+	for i := 1; i < n; i++ {
+		kMove := moves[i]
+		kScore := scores[i]
+		j := i - 1
+		for j >= 0 && scores[j] < kScore {
+			moves[j+1] = moves[j]
+			scores[j+1] = scores[j]
+			j--
+		}
+		moves[j+1] = kMove
+		scores[j+1] = kScore
+	}
+
+	return moves
+}
+
+func (p *Position) orderMovesQ(moves []Move, scores []int, pins [2]Bitboard, ksq [2]int) {
+	n := len(moves)
+	for i := 0; i < n; i++ {
+		m := moves[i]
+		score := 0
+		if m.isPromo() {
+			score = scorePromoBase + pieceValues[m.promoType()]
+		} else if m.isCapture() {
+			seeVal := p.see(m, pins, ksq)
+			if seeVal >= 0 {
+				victim := Pawn
+				if vt := p.square[m.to()]; vt != -1 {
+					victim = vt & 7
+				}
+				score = scoreCaptureBase + seeVal + pieceValues[victim]*MVVLVAWeight - pieceValues[p.square[m.from()]&7]
+			} else {
+				// Bad, Prune or sort later
+				score = seeVal
+			}
+		}
+		scores[i] = score
+	}
+
+	for i := 1; i < n; i++ {
+		kMove := moves[i]
+		kScore := scores[i]
+		j := i - 1
+		for j >= 0 && scores[j] < kScore {
+			moves[j+1] = moves[j]
+			scores[j+1] = scores[j]
+			j--
+		}
+		moves[j+1] = kMove
+		scores[j+1] = kScore
+	}
+}
+
+/*
+  ----------------------------------------------------------------------------------
+   QUIESCENCE SEARCH
+  ----------------------------------------------------------------------------------
+   Standard search stops at a fixed depth, but this can lead to the "Horizon Effect",
+   where the engine misses critical tactical sequences just beyond the search depth.
+
+   Scenario:
+   Depth 4: White takes Black Queen. Eval says White is +900. STOP (time ran out etc...)
+   Depth 5: Black takes back White Queen immediately after. Eval is actually Equal.
+
+   Solution:
+   When Depth is 0, do NOT stop if there are "noisy" moves (usually limited to captures), though some people include checks and promotions.
+   Keep searching strictly through noisy moves until the position is "Quiet".
+*/
+
+func (p *Position) quiesce(alpha, beta, ply int, tc *TimeControl) int {
+	if ply >= MaxDepth {
+		return p.evaluate()
+	}
+	p.localNodes++
+
+	if (p.localNodes & NodeCheckMaskSearch) == 0 {
+		if tc.shouldStop() {
+			return alpha
+		}
+	}
+
+	inCheck := p.inCheck()
+	best := alpha
+	if !inCheck {
+		stand := p.evaluate()
+		if stand >= beta {
+			return stand
+		}
+		best = stand
+		if stand > alpha {
+			alpha = stand
+		}
+		if !p.isEndgame() {
+			them := p.side ^ 1
+			maxGain := 0
+			if p.pieces[them][Queen] != 0 {
+				maxGain = pieceValues[Queen]
+			} else if p.pieces[them][Rook] != 0 {
+				maxGain = pieceValues[Rook]
+			} else if (p.pieces[them][Bishop] | p.pieces[them][Knight]) != 0 {
+				maxGain = pieceValues[Bishop]
+			} else if p.pieces[them][Pawn] != 0 {
+				maxGain = pieceValues[Pawn]
+			}
+			if stand+maxGain+DeltaMargin < alpha {
+				return stand
+			}
+		}
+	}
+
+	var movesArr [256]Move
+	n := p.generateMovesTo(movesArr[:], !inCheck)
+	moves := movesArr[:n]
+
+	pins := [2]Bitboard{p.getPins(White), p.getPins(Black)}
+	ksq := p.kingSq
+
+	var stackScores [256]int
+	scores := stackScores[:n]
+	p.orderMovesQ(moves, scores, pins, ksq)
+
+	legalCount := 0
+	for i, m := range moves {
+		if tc.shouldStop() {
+			return alpha
+		}
+		// Prune bad caps, not in check so we dont prune check responses
+		if !inCheck && m.isCapture() && scores[i] < 0 {
+			continue
+		}
+		if !p.isLegal(m) {
+			continue
+		}
+		legalCount++
+
+		undo := p.makeMove(m)
+		score := -p.quiesce(-beta, -alpha, ply+1, tc)
+		p.unmakeMove(m, undo)
+
+		if score >= beta {
+			return beta
+		}
+		if score > best {
+			best = score
+		}
+		if score > alpha {
+			alpha = score
+		}
+	}
+
+	if inCheck && legalCount == 0 {
+		return -Mate + ply
+	}
+
+	return best
+}
+
+// Run a limited negamax for the singular move
+func (p *Position) negamaxSingular(depth, beta, ply int, tc *TimeControl, ss *[MaxDepth + 100]SearchStack, excluded Move, prevMove Move) int {
+	if depth <= 0 {
+		return p.quiesce(beta-1, beta, ply, tc)
+	}
+
+	bestScore := -Infinity
+	var movesArr [256]Move
+	n := p.generateMovesTo(movesArr[:], false)
+	moves := p.orderMoves(movesArr[:n], 0, ss[ply].killer1, ss[ply].killer2, prevMove)
+
+	for _, m := range moves {
+		if m == excluded {
+			continue
+		}
+		if (p.localNodes & NodeCheckMaskSearch) == 0 {
+			if tc.shouldStop() {
+				return beta
+			}
+		}
+		if !p.isLegal(m) {
+			continue
+		}
+		undo := p.makeMove(m)
+		score := -p.negamax(depth-1, -beta, -beta+1, ply+1, nil, tc, ss, m)
+		p.unmakeMove(m, undo)
+
+		if score >= beta {
+			return score
+		}
+		if score > bestScore {
+			bestScore = score
+		}
+	}
+	return bestScore
+}
+
+/*
+  ----------------------------------------------------------------------------------
+   NEGAMAX SEARCH WITH ALPHA-BETA PRUNING
+  ----------------------------------------------------------------------------------
+   This function explores the game tree to find the best move. It uses the Negamax
+   framework where max(a, b) = -min(-b, -a), simplifying code for 2-player zero-sum games.
+
+          [ Root Node ]
+          /     |     \
+      [Move A] [Move B] [Move C]
+        /         |        \
+     ...         ...      (Pruned?)
+
+   Key Optimizations used here:
+   1. Transposition Table (TT): Cache results to avoid re-searching identical positions.
+   2. Null Move Pruning (NMP): "Pass" the move; if still safe, the position is too good (cutoff).
+   3. Late Move Reductions (LMR): Search moves that were ordered as less promising at lower depth first.
+   4. Quiescence Search: At leaf nodes, play out captures to avoid "horizon effects".
+
+   Alpha (α): Best score the maximizing player can guarantee so far.
+   Beta  (β): Best score the minimizing player can guarantee so far.
+   Condition: If Score >= Beta, we have a "Cutoff" (branch is too good, opponent won't allow it).
+*/
+
+func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeControl, ss *[MaxDepth + 100]SearchStack, prevMove Move) int {
+	if ply >= MaxDepth {
+		return p.evaluate()
+	}
+	p.localNodes++
+
+	// Time check
+	if (p.localNodes & NodeCheckMaskSearch) == 0 {
+		if tc.shouldStop() {
+			return alpha
+		}
+	}
+
+	inCheck := p.inCheck()
+
+	if inCheck {
+		depth++
+	}
+
+	if depth <= 0 {
+		return p.quiesce(alpha, beta, ply, tc)
+	}
+
+	// TT lookup
+	origAlpha := alpha
+	var hashMove Move
+	if move, score, flag, _, found, usable := tt.Probe(p.hash, depth); found {
+		hashMove = move
+		if pv == nil {
+			scoreFromTT := score
+			isMateScore := scoreFromTT > Mate-MateScoreGuard || scoreFromTT < -Mate+MateScoreGuard
+			if isMateScore {
+				if scoreFromTT > 0 {
+					scoreFromTT -= ply
+				} else {
+					scoreFromTT += ply
+				}
+			}
+
+			if usable {
+				switch flag {
+				case ttFlagExact:
+					return scoreFromTT
+				case ttFlagLower:
+					if scoreFromTT >= beta {
+						return scoreFromTT
+					}
+				case ttFlagUpper:
+					if scoreFromTT <= alpha {
+						return scoreFromTT
+					}
+				}
+			}
+		}
+	}
+
+	// IIR
+	if depth >= 4 && hashMove == 0 {
+		depth--
+	}
+
+	// Mate distance pruning
+	if beta > Mate-ply {
+		if alpha >= Mate-ply {
+			return Mate - ply
+		}
+		beta = Mate - ply
+	}
+	if alpha < -Mate+ply {
+		if -Mate+ply >= beta {
+			return -Mate + ply
+		}
+		alpha = -Mate + ply
+	}
+
+	// RFP check
+	if depth <= 8 && !inCheck && !p.isEndgame() {
+		if hashMove != 0 && !hashMove.isCapture() {
+			eval := p.evaluate()
+			// If we are far above beta, we can return soft fail
+			if eval >= beta+DeltaMargin*depth {
+				return eval
+			}
+		}
+	}
+
+	// Adaptive Null Move Pruning
+	if depth >= 3 && !inCheck && !p.isEndgame() {
+		R := 3 + depth/6
+
+		undo := p.makeNullMove()
+		score := -p.negamax(depth-1-R, -beta, -beta+1, ply+1, nil, tc, ss, 0)
+		p.unmakeNullMove(undo)
+
+		if score >= beta {
+			return beta
+		}
+	}
+
+	// ProbCut
+	if depth >= 5 && !inCheck && !p.isEndgame() {
+		probBeta := beta + 200
+		if probBeta <= Mate-MateScoreGuard {
+			score := p.negamax(depth-4, probBeta-1, probBeta, ply+1, nil, tc, ss, prevMove)
+			if score >= probBeta {
+				// Soft fail
+				return score
+			}
+		}
+	}
+
+	// Singular Extensions
+	singularExtension := 0
+	if depth >= 8 && hashMove != 0 && ply < MaxDepth-1 && pv == nil {
+		if _, ttScore, flag, _, found, _ := tt.Probe(p.hash, depth-3); found {
+			if flag == ttFlagLower || flag == ttFlagExact {
+				scoreTT := int(ttScore)
+				// Re-adjust mate scores
+				if scoreTT > Mate-MateScoreGuard {
+					scoreTT -= ply
+				} else if scoreTT < -Mate+MateScoreGuard {
+					scoreTT += ply
+				}
+				betaSingular := scoreTT - 2*depth
+				res := p.negamaxSingular(depth-4, betaSingular, ply, tc, ss, hashMove, prevMove)
+				if res < betaSingular {
+					singularExtension = 1
+				}
+			}
+		}
+	}
+
+	var movesArr [256]Move
+	n := p.generateMovesTo(movesArr[:], false)
+	moves := p.orderMoves(movesArr[:n], hashMove, ss[ply].killer1, ss[ply].killer2, prevMove)
+
+	bestMove := Move(0)
+	bestScore := -Infinity
+	legalMoves := 0
+	var quietsTried [256]Move
+	quietCount := 0
+
+	pvNode := pv != nil
+	var pvPtr *[]Move
+
+	var childPVBuf [MaxDepth]Move
+
+	for _, m := range moves {
+		if tc.shouldStop() {
+			return alpha
+		}
+		if !p.isLegal(m) {
+			continue
+		}
+		legalMoves++
+		isQuiet := !m.isCapture() && !m.isPromo()
+		if isQuiet {
+			quietsTried[quietCount] = m
+			quietCount++
+		}
+
+		// Late Move Pruning, prune like a muthafucka
+		if depth <= 3 && !pvNode && !inCheck {
+			threshold := 4 + depth*depth
+			if legalMoves > threshold {
+				continue
+			}
+		}
+
+		undo := p.makeMove(m)
+		childPV := childPVBuf[:0]
+		if pvNode {
+			pvPtr = &childPV
+		}
+		var score int
+		extension := 0
+		if m == hashMove {
+			extension = singularExtension
+		}
+
+		if p.isDraw() {
+			score = 0
+		} else {
+			// Late move reductions & Principal variation search
+			childDepth := depth - 1 + extension
+			canReduce := childDepth >= LMRMinChildDepth && !inCheck && isQuiet && legalMoves > LMRLateMoveAfter
+			var eff int
+			if canReduce {
+				red := lmrTable[min(depth, MaxDepth)][min(legalMoves, 255)]
+				// Reduce worse lines more
+				if !pvNode {
+					red++
+				}
+				eff = max(1, childDepth-red)
+			}
+			if canReduce {
+				score = -p.negamax(eff, -alpha-1, -alpha, ply+1, nil, tc, ss, m)
+				if score > alpha {
+					score = -p.negamax(childDepth, -beta, -alpha, ply+1, pvPtr, tc, ss, m)
+				}
+			} else {
+				if legalMoves > 1 && pvNode {
+					score = -p.negamax(childDepth, -alpha-1, -alpha, ply+1, nil, tc, ss, m)
+					if score > alpha {
+						score = -p.negamax(childDepth, -beta, -alpha, ply+1, pvPtr, tc, ss, m)
+					}
+				} else {
+					score = -p.negamax(childDepth, -beta, -alpha, ply+1, pvPtr, tc, ss, m)
+				}
+			}
+		}
+
+		p.unmakeMove(m, undo)
+
+		if score >= beta {
+			// Update killers
+			if isQuiet && m != hashMove {
+				k := &ss[ply]
+				if m != k.killer1 {
+					k.killer2, k.killer1 = k.killer1, m
+				}
+				// History Bonus
+				bonus := depth * depth
+				updateHistory(p.side, m.from(), m.to(), bonus)
+				// History Malus
+				for i := 0; i < quietCount-1; i++ {
+					updateHistory(p.side, quietsTried[i].from(), quietsTried[i].to(), -bonus)
+				}
+				// Countermove
+				if ply > 0 {
+					countermoves[p.side][prevMove.from()][prevMove.to()] = m
+				}
+			}
+
+			// Store in transposition table
+			storeScore := score
+			if storeScore > Mate-MateScoreGuard {
+				storeScore += ply
+			} else if storeScore < -Mate+MateScoreGuard {
+				storeScore -= ply
+			}
+			tt.Save(p.hash, m, storeScore, depth, ttFlagLower)
+			return score
+		}
+
+		// Update best move
+		if score > bestScore {
+			bestScore = score
+			bestMove = m
+		}
+
+		// Update alpha
+		if score > alpha {
+			alpha = score
+			if pv != nil {
+				*pv = append(append((*pv)[:0], m), childPV...)
+			}
+		}
+	}
+
+	// Handle draw & checkmate results
+	if legalMoves == 0 {
+		var result int
+		if inCheck {
+			result = -Mate + ply
+		} else {
+			result = 0
+		}
+		storeScore := result
+		if storeScore > Mate-MateScoreGuard {
+			storeScore += ply
+		} else if storeScore < -Mate+MateScoreGuard {
+			storeScore -= ply
+		}
+		tt.Save(p.hash, Move(0), storeScore, depth, ttFlagExact)
+		return result
+	}
+
+	flag := ttFlagExact
+	if bestScore <= origAlpha {
+		flag = ttFlagUpper
+	}
+
+	storeScore := bestScore
+	if storeScore > Mate-MateScoreGuard {
+		storeScore += ply
+	} else if storeScore < -Mate+MateScoreGuard {
+		storeScore -= ply
+	}
+	tt.Save(p.hash, bestMove, storeScore, depth, flag)
+	return bestScore
+}
+
+/*
+  ----------------------------------------------------------------------------------
+   ITERATIVE DEEPENING SEARCH
+  ----------------------------------------------------------------------------------
+   Instead of searching directly to Depth 10, we search Depth 1, then 2, then 3...
+   This might seem slower than just going directly to depth 10, but it offers unique advantages:
+
+   Visual
+   [Start]
+    Search D=1 -> BestMove A
+	Search D=2 -> BestMove A (uses info from depth 1 to sort moves)
+	Search D=3 -> BestMove B (found a better move)
+	[Time Up!] -> Return result, even if iteration is unfinished. This is safe because even though its an unfinished iteration,
+	We searched the previous completed iteration fully, sorted that move as likely the best for this iteration as well,
+	so we either return that or an even better move.
+
+   Benefits:
+   1. Time Management: We always have a "best move so far" if we must stop abruptly (as we do in chess).
+   2. Move Ordering: The BestMove from Depth X-1 is the first move searched at Depth X.
+*/
+
+func (p *Position) search(tc *TimeControl) Move {
+	var bestMove Move
+	var ss [MaxDepth + 100]SearchStack
+
+	maxDepth := tc.depth
+	if maxDepth == 0 || tc.infinite {
+		maxDepth = MaxDepth
+	}
+
+	// Start timers
+	p.localNodes = 0
+	start := time.Now()
+	var prevScore int
+	var pvBuf [MaxDepth]Move
+	for depth := 1; depth <= maxDepth; depth++ {
+		pv := pvBuf[:0]
+		var score int
+
+		// Aspiration windows
+		if depth >= AspirationStartDepth {
+			window := AspirationBase
+			low, high := prevScore-window, prevScore+window
+			for {
+				if low < -Infinity {
+					low = -Infinity
+				}
+				if high > Infinity {
+					high = Infinity
+				}
+
+				score = p.negamax(depth, low, high, 0, &pv, tc, &ss, 0)
+
+				if tc.shouldStop() {
+					break
+				}
+
+				if score <= low {
+					low -= window
+					window *= 2
+				} else if score >= high {
+					high += window
+					window *= 2
+				} else {
+					break
+				}
+
+				if window >= 1000 {
+					score = p.negamax(depth, -Infinity, Infinity, 0, &pv, tc, &ss, 0)
+					break
+				}
+			}
+		} else {
+			score = p.negamax(depth, -Infinity, Infinity, 0, &pv, tc, &ss, 0)
+		}
+		prevScore = score
+		iterNodes := p.localNodes
+
+		elapsed := time.Since(start)
+		elapsedMs := elapsed.Milliseconds()
+		nps := int64(0)
+		if elapsed > 0 {
+			nps = int64(float64(iterNodes) / elapsed.Seconds())
+		}
+
+		if tc.shouldStop() {
+			break
+		}
+
+		if len(pv) > 0 {
+			bestMove = pv[0]
+		}
+
+		// Print search info
+		absScore := abs(score)
+		if absScore >= Mate-MateScoreGuard {
+			matePly := Mate - absScore
+			mateMoves := (matePly + 1) / 2
+			if score > 0 {
+				fmt.Printf("info depth %d score mate %d nodes %d time %d nps %d pv",
+					depth, mateMoves, iterNodes, elapsedMs, nps)
+			} else {
+				fmt.Printf("info depth %d score mate -%d nodes %d time %d nps %d pv",
+					depth, mateMoves, iterNodes, elapsedMs, nps)
+			}
+		} else {
+			fmt.Printf("info depth %d score cp %d nodes %d time %d nps %d pv",
+				depth, score, iterNodes, elapsedMs, nps)
+		}
+		for _, m := range pv {
+			fmt.Printf(" %v", m)
+		}
+		fmt.Println()
+
+		// Return result
+		if absScore >= Mate-MateScoreGuard {
+			return bestMove
+		}
+
+		if !tc.shouldContinue(elapsed) {
+			break
+		}
+	}
+	return bestMove
+}
+
+// -------------------------------------------
+// TIME CONTROL
+// -------------------------------------------
+func (tc *TimeControl) Stop() {
+	atomic.StoreInt32(&tc.stopped, 1)
+}
+
+/*
+  ----------------------------------------------------------------------------------
+   TIME MANAGEMENT HEURISTICS
+  ----------------------------------------------------------------------------------
+   Deciding how much time to spend on a move is hard balance to find.
+   - Too little: We play hasty, weak moves.
+   - Too much: We likely flag (run out of time) later in the game.
+
+   Strategy:
+   1. Moves To Go: Assume the game lasts ~20-30-40 more moves (Can be whatever you like).
+   2. Increment: Always safely bank on the increment (winc/binc).
+   3. Safety Buffer: Subtract a margin (minTimeMs) to account for possible GUI lag.
+
+   Formula:
+    TimeForMove = (RemainingTime / MovesToGo) + Increment
+*/
+
+func (tc *TimeControl) allocateTime(side int) {
+	if tc.movetime > 0 {
+		tc.deadline = time.Now().Add(time.Duration(tc.movetime) * time.Millisecond)
+		return
+	}
+	if tc.infinite || tc.depth > 0 {
+		tc.deadline = time.Time{}
+		return
+	}
+
+	var myTime, myInc int64
+	if side == White {
+		myTime, myInc = tc.wtime, tc.winc
+	} else {
+		myTime, myInc = tc.btime, tc.binc
+	}
+
+	movesToGo := tc.movestogo
+	if movesToGo <= 0 {
+		movesToGo = DefaultMovesToGo
+	}
+
+	usableTime := max(myTime-minTimeMs, 0)
+
+	fromBank := usableTime / int64(movesToGo)
+	capBank := usableTime / perMoveCapDiv
+	if fromBank > capBank {
+		fromBank = capBank
+	}
+
+	baseMs := min(fromBank+myInc, usableTime)
+	if myTime < 1000 {
+		baseMs = min(baseMs, myTime-100)
+	}
+
+	if baseMs < minTimeMs && usableTime > 0 {
+		baseMs = min(minTimeMs, usableTime)
+	}
+
+	tc.deadline = time.Now().Add(time.Millisecond * time.Duration(baseMs))
+}
+
+func (tc *TimeControl) shouldStop() bool {
+	if atomic.LoadInt32(&tc.stopped) != 0 {
+		return true
+	}
+	d := tc.deadline
+	return !d.IsZero() && time.Until(d) <= 0
+}
+
+func (tc *TimeControl) shouldContinue(lastIter time.Duration) bool {
+	if atomic.LoadInt32(&tc.stopped) != 0 {
+		return false
+	}
+
+	if tc.infinite || tc.depth > 0 || lastIter <= 0 {
+		return true
+	}
+
+	remain := time.Until(tc.deadline)
+	if remain <= 0 {
+		return false
+	}
+
+	minRequired := lastIter*nextIterMult + continueMargin
+	return remain > minRequired
+}
+
+/*
+  ----------------------------------------------------------------------------------
+   PERFT (Performance Test & Move Generation Validator)
+  ----------------------------------------------------------------------------------
+   Perft is a debugging function that traverses the move tree to a specific depth
+   and counts the number of leaf nodes.
+
+   Why is this useful?
+   It verifies that the move generator (generateMovesTo, makeMove, unmakeMove) is
+   mostly bug-free. We compare the results against known values for the start position.
+
+   Example (Depth 1):
+   Start Pos -> 20 legal moves. Perft(1) should return 20.
+
+   Divide:
+   "Divide" prints the child count for *each* root move separately.
+   Perft 2 Divide Example:
+   e2e4: 20
+   e2e3: 20
+   g1f3: 20
+   --------
+   Total: 400
+   This isolates exactly which move branch contains a possible bug, if node counts differ from known results.
+*/
+
+func (p *Position) perft(depth int) int {
+	if depth == 0 {
+		return 1
+	}
+
+	var movesArr [256]Move
+	n := p.generateMovesTo(movesArr[:], false)
+	count := 0
+	for i := 0; i < n; i++ {
+		m := movesArr[i]
+		if !p.isLegal(m) {
+			continue
+		}
+		undo := p.makeMove(m)
+		count += p.perft(depth - 1)
+		p.unmakeMove(m, undo)
+	}
+
+	return count
+}
+
+func (p *Position) perftDivide(depth int) {
+	var movesArr [256]Move
+	n := p.generateMovesTo(movesArr[:], false)
+	total := 0
+
+	for i := 0; i < n; i++ {
+		m := movesArr[i]
+		if !p.isLegal(m) {
+			continue
+		}
+		undo := p.makeMove(m)
+		count := p.perft(depth - 1)
+		p.unmakeMove(m, undo)
+
+		fmt.Printf("%v: %d\n", m, count)
+		total += count
+	}
+
+	fmt.Printf("\nTotal: %d\n", total)
+}
+
+func runSearchAndReport(p *Position, tc *TimeControl) {
+	defer searchWG.Done()
+	move := p.search(tc)
+	if !currentTC.CompareAndSwap(tc, nil) {
+		return
+	}
+	fmt.Println("bestmove", move)
+}
+
+func parseSetOption(parts []string) (name, value string) {
+	nameStart, nameEnd, valueStart := -1, -1, -1
+	for i, p := range parts {
+		if p == "name" && nameStart == -1 {
+			nameStart = i + 1
+			continue
+		}
+		if p == "value" && nameStart != -1 && nameEnd == -1 {
+			nameEnd = i
+			valueStart = i + 1
+			break
+		}
+	}
+	if nameStart == -1 {
+		return "", ""
+	}
+	if nameEnd == -1 {
+		return strings.Join(parts[nameStart:], " "), ""
+	}
+
+	if nameStart >= nameEnd {
+		return "", ""
+	}
+	name = strings.Join(parts[nameStart:nameEnd], " ")
+	value = strings.Join(parts[valueStart:], " ")
+	return name, value
+}
+
+/*
+  ----------------------------------------------------------------------------------
+   UCI MAIN LOOP (Universal Chess Interface)
+  ----------------------------------------------------------------------------------
+   This is the communication part. The GUI (Arena, Banksia, Cutechess) sends text commands, we reply with text.
+
+   [ GUI ] -------- "position startpos moves e2e4" ---->  [ ENGINE ]
+   [ GUI ] <------- "info depth 5 score cp 20..." ------  [ ENGINE ]
+   [ GUI ] -------- "go wtime 60000" ------------------>  [ ENGINE ]
+   [ GUI ] <------- "bestmove e7e5" --------------------  [ ENGINE ]
+
+   The loop waits for Stdin input, parses the string, and triggers engine functions.
+   It must be non-blocking where possible to handle "stop" commands.
+*/
+
+func uciLoop() {
+	pos := NewPosition()
+	scanner := bufio.NewScanner(os.Stdin)
+	fmt.Fprintln(os.Stderr, "# Soomi V1.2.0 ready. Type 'help' for available commands.")
+
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		parts := strings.Fields(line)
+		cmd := parts[0]
+
+		switch cmd {
+		case "uci":
+			fmt.Println("id name Soomi V1.2.0")
+			fmt.Println("id author Otto Laukkanen")
+			fmt.Println("option name Hash type spin default 256 min 1 max 4096")
+			fmt.Println("uciok")
+
+		case "isready":
+			fmt.Println("readyok")
+
+		case "setoption":
+			name, value := parseSetOption(parts)
+			if strings.EqualFold(name, "Hash") {
+				sizeMB, err := strconv.Atoi(value)
+				if err != nil || sizeMB <= 0 {
+					fmt.Printf("info string invalid hash value: %s\n", value)
+					continue
+				}
+				if cur := currentTC.Load(); cur != nil {
+					cur.Stop()
+					if currentTC.Load() != nil {
+						fmt.Printf("info string Hash unchanged (search running)\n")
+						continue
+					}
+				}
+				InitTT(sizeMB)
+				fmt.Printf("info string Hash set to %d MB\n", sizeMB)
+			} else {
+				fmt.Printf("info string setoption %q = %q (ignored)\n", name, value)
+			}
+
+		case "ucinewgame":
+			if cur := currentTC.Swap(nil); cur != nil {
+				cur.Stop()
+			}
+			tt.Clear()
+			clearHeuristics()
+			pos.setStartPos()
+
+		case "position":
+			if cur := currentTC.Swap(nil); cur != nil {
+				cur.Stop()
+			}
+			if len(parts) < 2 {
+				fmt.Println("# Error: position requires arguments")
+				continue
+			}
+			moveIdx := -1
+			for i := 2; i < len(parts); i++ {
+				if parts[i] == "moves" {
+					moveIdx = i
+					break
+				}
+			}
+
+			if parts[1] == "startpos" {
+				pos.setStartPos()
+			} else if parts[1] == "fen" {
+				fenParts := []string{}
+				for i := 2; i < len(parts); i++ {
+					if parts[i] == "moves" {
+						moveIdx = i
+						break
+					}
+					fenParts = append(fenParts, parts[i])
+				}
+				pos.setFEN(strings.Join(fenParts, " "))
+			}
+
+			if moveIdx != -1 && moveIdx+1 < len(parts) {
+				for _, mvStr := range parts[moveIdx+1:] {
+					if len(mvStr) < 4 || len(mvStr) > 5 {
+						fmt.Printf("# Error: invalid move format: %s. Further moves ignored.\n", mvStr)
+						break
+					}
+					found := false
+					var buf [256]Move
+					n := pos.generateMovesTo(buf[:], false)
+					for j := 0; j < n; j++ {
+						m := buf[j]
+						if strings.EqualFold(m.String(), mvStr) && pos.isLegal(m) {
+							pos.makeMove(m)
+							found = true
+							break
+						}
+					}
+					if !found {
+						fmt.Printf("# Error: illegal move: %s. Further moves ignored.\n", mvStr)
+						break
+					}
+				}
+			}
+		case "go":
+			if cur := currentTC.Swap(nil); cur != nil {
+				cur.Stop()
+			}
+			searchWG.Wait()
+
+			tc := &TimeControl{}
+
+			for i := 1; i < len(parts); i++ {
+				switch parts[i] {
+				case "wtime":
+					if i+1 < len(parts) {
+						tc.wtime, _ = strconv.ParseInt(parts[i+1], 10, 64)
+						i++
+					}
+				case "btime":
+					if i+1 < len(parts) {
+						tc.btime, _ = strconv.ParseInt(parts[i+1], 10, 64)
+						i++
+					}
+				case "winc":
+					if i+1 < len(parts) {
+						tc.winc, _ = strconv.ParseInt(parts[i+1], 10, 64)
+						i++
+					}
+				case "binc":
+					if i+1 < len(parts) {
+						tc.binc, _ = strconv.ParseInt(parts[i+1], 10, 64)
+						i++
+					}
+				case "movestogo":
+					if i+1 < len(parts) {
+						tc.movestogo, _ = strconv.Atoi(parts[i+1])
+						i++
+					}
+				case "depth":
+					if i+1 < len(parts) {
+						tc.depth, _ = strconv.Atoi(parts[i+1])
+						i++
+					}
+				case "movetime":
+					if i+1 < len(parts) {
+						tc.movetime, _ = strconv.ParseInt(parts[i+1], 10, 64)
+						i++
+					}
+				case "infinite":
+					tc.infinite = true
+				}
+			}
+
+			tc.allocateTime(pos.side)
+			pcopy := *pos
+			currentTC.Store(tc)
+
+			searchWG.Add(1)
+			go runSearchAndReport(&pcopy, tc)
+
+		case "stop":
+			if cur := currentTC.Load(); cur != nil {
+				cur.Stop()
+			}
+
+		case "quit":
+			if cur := currentTC.Swap(nil); cur != nil {
+				cur.Stop()
+			}
+			return
+
+		case "d", "display":
+			fmt.Println("\n   a b c d e f g h")
+			fmt.Println("  ----------------")
+			for r := 7; r >= 0; r-- {
+				fmt.Printf("%d|", r+1)
+				for f := 0; f < 8; f++ {
+					sq := r*8 + f
+					c, pt, ok := pos.pieceAt(sq)
+					if ok {
+						piece := "PNBRQK"[pt]
+						if c == Black {
+							piece += 32
+						}
+						fmt.Printf(" %c", piece)
+					} else {
+						fmt.Print(" .")
+					}
+				}
+				fmt.Printf(" |%d\n", r+1)
+			}
+			fmt.Println("  ----------------")
+			fmt.Println("   a b c d e f g h")
+			fmt.Printf("Side to move: %s\n", map[int]string{White: "White", Black: "Black"}[pos.side])
+			fmt.Printf("Hash: %x\n\n", pos.hash)
+
+		case "eval":
+			score := pos.evaluate()
+			fmt.Printf("Evaluation: %+d (from %s's perspective)\n", score, map[int]string{White: "White", Black: "Black"}[pos.side])
+
+		case "audit":
+			fmt.Println("# Starting internal state audit...")
+			// 1. Bitboard const
+			occ := Bitboard(0)
+			for c := 0; c < 2; c++ {
+				for pt := 0; pt < 6; pt++ {
+					occ |= pos.pieces[c][pt]
+				}
+			}
+			if occ != pos.all {
+				fmt.Printf("!! BITBOARD DESYNC: pos.all (%x) != calculated (%x)\n", pos.all, occ)
+			} else {
+				fmt.Println("  - Bitboard occupancy: OK")
+			}
+
+			// 2. Hash const
+			expectedHash := uint64(0)
+			if pos.side == Black {
+				expectedHash ^= zobristSide
+			}
+			if pos.castle&1 != 0 {
+				expectedHash ^= zobristCastleWK
+			}
+			if pos.castle&2 != 0 {
+				expectedHash ^= zobristCastleWQ
+			}
+			if pos.castle&4 != 0 {
+				expectedHash ^= zobristCastleBK
+			}
+			if pos.castle&8 != 0 {
+				expectedHash ^= zobristCastleBQ
+			}
+			if pos.epSquare != -1 {
+				expectedHash ^= zobristEP[pos.epSquare%8]
+			}
+			expectedPawnHash := uint64(0)
+			for sq := 0; sq < 64; sq++ {
+				c, pt, ok := pos.pieceAt(sq)
+				if ok {
+					expectedHash ^= zobristPiece[c][pt][sq]
+					if pt == Pawn {
+						expectedPawnHash ^= zobristPiece[c][Pawn][sq]
+					}
+				}
+			}
+			if expectedHash != pos.hash {
+				fmt.Printf("!! HASH DESYNC: pos.hash (%x) != calculated (%x)\n", pos.hash, expectedHash)
+			} else {
+				fmt.Println("  - Zobrist hash: OK")
+			}
+			if expectedPawnHash != pos.pawnHash {
+				fmt.Printf("!! PAWN HASH DESYNC: pos.pawnHash (%x) != calculated (%x)\n", pos.pawnHash, expectedPawnHash)
+			} else {
+				fmt.Println("  - Pawn hash: OK")
+			}
+			fmt.Println("# Audit complete.")
+
+		case "perft":
+			if len(parts) > 1 {
+				maxDepth, _ := strconv.Atoi(parts[1])
+				fmt.Println("\nRunning perft test...")
+				fmt.Println("Depth    Nodes           Time        NPS")
+				fmt.Println("---------------------------------------------")
+				for depth := 1; depth <= maxDepth; depth++ {
+					start := time.Now()
+					count := pos.perft(depth)
+					elapsed := time.Since(start)
+					nps := int64(0)
+					if elapsed.Seconds() > 0 {
+						nps = int64(float64(count) / elapsed.Seconds())
+					}
+					timeStr := ""
+					if elapsed < time.Second {
+						timeStr = fmt.Sprintf("%d ms", elapsed.Milliseconds())
+					} else {
+						timeStr = fmt.Sprintf("%.2f s", elapsed.Seconds())
+					}
+					fmt.Printf("%-8d %-15d %-11s %d\n", depth, count, timeStr, nps)
+				}
+				fmt.Println()
+			} else {
+				fmt.Println("# Usage: perft <depth>")
+			}
+
+		case "divide":
+			if len(parts) > 1 {
+				depth, _ := strconv.Atoi(parts[1])
+				pos.perftDivide(depth)
+			} else {
+				fmt.Println("# Usage: divide <depth>")
+			}
+
+		case "help":
+			printHelp()
+
+		default:
+			fmt.Printf("# Unknown command: %s (type 'help' for available commands)\n", cmd)
+		}
+	}
+}
+
+func printHelp() {
+	fmt.Println(`# Soomi V1.2.0 - Available Commands:
+
+UCI Protocol Commands:
+  uci                              - Initialize UCI mode
+  isready                          - Check if engine is ready
+  ucinewgame                       - Start a new game
+  position startpos                - Set starting position
+  position startpos moves <moves>  - Set position after moves
+  go [options]                     - Start searching
+      wtime <ms>                   - White's remaining time
+      btime <ms>                   - Black's remaining time
+      winc <ms>                    - White's increment per move
+      binc <ms>                    - Black's increment per move
+      movestogo <n>                - Moves until time control
+      depth <n>                    - Search to fixed depth
+      movetime <ms>                - Search for fixed time
+      infinite                     - Search indefinitely
+  stop                             - Stop searching
+  quit                             - Exit engine
+
+Additional Commands:
+  d, display                       - Display current board
+  eval                             - Show static evaluation
+  perft <depth>                    - Run perft test
+  divide <depth>                   - Run divide test
+  help                             - Show this help message
+
+Example Usage:
+  1. Start new game:
+     ucinewgame
+     
+  2. Set position and make moves:
+     position startpos moves e2e4 e7e5 g1f3
+     
+  3. Search with time control:
+     go wtime 300000 btime 300000 winc 0 binc 0
+     
+  4. Search to depth 10:
+     go depth 10
+     
+  5. Display current position:
+     d`)
+}
+
+func main() {
+	fmt.Fprintln(os.Stderr, "Soomi V1.2.0 - UCI Chess Engine")
+	fmt.Fprintln(os.Stderr, "Type 'help' for available commands or 'uci' to enter UCI mode")
+	fmt.Fprintln(os.Stderr)
+	uciLoop()
+}
+
+// To make an executable
+// go build -trimpath -ldflags "-s -w" -gcflags "all=-B" -o Soomi-V1.2.0.exe soomi.go
