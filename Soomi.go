@@ -1505,8 +1505,6 @@ func (p *Position) isLegal(m Move) bool {
 		tB &^= capBB
 		tR &^= capBB
 		tQ &^= capBB
-		// This is probably redundant but i dont bother testing
-		tK &^= capBB
 	}
 
 	occ2 := p.all&^fromBB | toBB
@@ -1662,10 +1660,7 @@ func (p *Position) makeMove(m Move) Undo {
 		p.occupied[us] |= bbTo
 		p.all |= bbTo
 		h ^= zobristPiece[us][promoType][to]
-		// This also is probably redundant
-		if promoType == Pawn {
-			p.pawnHash ^= zobristPiece[us][Pawn][to]
-		}
+
 		p.material[us] += pieceValues[promoType]
 		p.phase -= piecePhase[promoType]
 		p.psqScore[us] += pst[us][promoType][to]
