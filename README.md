@@ -8,25 +8,26 @@
 
 -Soomi is a small chess engine written in Go. It started as a learning project to understand core chess programming techniques like bitboards and search algorithms.
 
--Despite this it is able to produce almost master level chess play, my estimations put it above 2000 elo.
+-Can produce master level play with the occasional hiccups, my estimation is 2300-2500 CCRL.
 
 ## Features
 - Bitboard move generation using Magic Bitboards
-- Evaluation based on material and piece-square tables.
+- Evaluation based on material, PST, mobility, king safety, pawn structure, tempo, king tropism.
 - Tapered evaluation
 - Negamax search with Alpha-Beta pruning
 - Principal Variation Search (PVS)
 - Iterative Deepening with Aspiration Windows
 - Transposition Table
-- Check extensions
+- Check and singular extensions
 - Quiescence Search with Delta Pruning
-- Pruning techniques including Late Move Reductions (LMR), Null Move Pruning (NMP), and Mate Distance Pruning
-- Move ordering using Hash move, MVV-LVA (captures), and killers & piece square tables for quiet moves
+- Static Exchange Evaluation (SEE)
+- Pruning techniques including Late Move Reductions (LMR), Null Move Pruning (NMP), Reverse Futility Pruning (RFP), Late Move Pruning (LMP) and Mate Distance Pruning
+- Move ordering using Hash move, MVV-LVA and SEE (captures), killers, history heuristic and countermove heuristic
 - UCI protocol (compatible with Arena, others not tested)
+- FEN parsing
 - Simple time management
 
 ## Limitations
-- No FEN parsing: Input/output is limited to UCI position commands.
 - Single-threaded: The engine runs on a single core and does not support pondering.
 - Hand-tuned Evaluation: The evaluation terms are manually tuned, basically taken "from the hat"
 
@@ -46,8 +47,12 @@ go build -trimpath -ldflags "-s -w" -o Soomi.exe soomi.go
 go build -trimpath -ldflags "-s -w" -gcflags "all=-B" -o Soomi.exe soomi.go
 ```
 
-## Current Issues
-- Insufficient Material: The engine doesn't automatically detect insufficient material draws (like King vs King), so it might continue playing in drawn positions.
+## Possible improvements
+- Tune evaluation & pruning values
+- Add pondering, opening book
+- Multithreading
+- More evaluation terms
+- Better move-ordering
 
 ## License
 Free to distribute and modify. Please credit the original author (Otto Laukkanen) if you use this code.
