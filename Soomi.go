@@ -2009,7 +2009,7 @@ func updateHistory(side, from, to, bonus int) {
 }
 
 func (p *Position) evalPawns() (mg, eg int) {
-	idx := p.pawnHash % uint64(pawnTableSize)
+	idx := p.pawnHash & (pawnTableSize - 1)
 	entry := &pawnTable[idx]
 	if entry.key == p.pawnHash {
 		return entry.mgScore, entry.egScore
