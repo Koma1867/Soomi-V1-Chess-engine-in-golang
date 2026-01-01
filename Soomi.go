@@ -1308,7 +1308,7 @@ func (p *Position) generateMovesTo(buf []Move, capturesOnly bool) int {
 				i++
 			}
 
-			attacks := pawnAttacks[us][from] & occThem & ^p.pieces[them][King]
+			attacks := pawnAttacks[us][from] & occThem
 			for att := attacks; att != 0; {
 				to := popLSB(&att)
 				buf[i] = makeMoves(from, to, FlagPromoCQ)
@@ -1334,7 +1334,7 @@ func (p *Position) generateMovesTo(buf []Move, capturesOnly bool) int {
 				}
 			}
 
-			attacks := pawnAttacks[us][from] & occThem & ^p.pieces[them][King]
+			attacks := pawnAttacks[us][from] & occThem
 			for att := attacks; att != 0; {
 				to := popLSB(&att)
 				buf[i] = makeMoves(from, to, FlagCapture)
@@ -1352,7 +1352,7 @@ func (p *Position) generateMovesTo(buf []Move, capturesOnly bool) int {
 
 	for bb := p.pieces[us][Knight]; bb != 0; {
 		from := popLSB(&bb)
-		attacks := knightAttacks[from] & ^occUs & ^p.pieces[them][King]
+		attacks := knightAttacks[from] & ^occUs
 		if capturesOnly {
 			attacks &= occThem
 		}
@@ -1369,7 +1369,7 @@ func (p *Position) generateMovesTo(buf []Move, capturesOnly bool) int {
 
 	for bb := p.pieces[us][Bishop]; bb != 0; {
 		from := popLSB(&bb)
-		attacks := bishopAttacks(from, occAll) & ^occUs & ^p.pieces[them][King]
+		attacks := bishopAttacks(from, occAll) & ^occUs
 		if capturesOnly {
 			attacks &= occThem
 		}
@@ -1386,7 +1386,7 @@ func (p *Position) generateMovesTo(buf []Move, capturesOnly bool) int {
 
 	for bb := p.pieces[us][Rook]; bb != 0; {
 		from := popLSB(&bb)
-		attacks := rookAttacks(from, occAll) & ^occUs & ^p.pieces[them][King]
+		attacks := rookAttacks(from, occAll) & ^occUs
 		if capturesOnly {
 			attacks &= occThem
 		}
@@ -1403,7 +1403,7 @@ func (p *Position) generateMovesTo(buf []Move, capturesOnly bool) int {
 
 	for bb := p.pieces[us][Queen]; bb != 0; {
 		from := popLSB(&bb)
-		attacks := (bishopAttacks(from, occAll) | rookAttacks(from, occAll)) & ^occUs & ^p.pieces[them][King]
+		attacks := (bishopAttacks(from, occAll) | rookAttacks(from, occAll)) & ^occUs
 		if capturesOnly {
 			attacks &= occThem
 		}
@@ -1421,7 +1421,7 @@ func (p *Position) generateMovesTo(buf []Move, capturesOnly bool) int {
 	// da king moves
 	kingSq := p.kingSq[us]
 	if kingSq < 64 {
-		attacks := kingAttacks[kingSq] & ^occUs & ^p.pieces[them][King]
+		attacks := kingAttacks[kingSq] & ^occUs
 		if capturesOnly {
 			attacks &= occThem
 		}
