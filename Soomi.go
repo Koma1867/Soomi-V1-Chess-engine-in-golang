@@ -355,14 +355,14 @@ func bishopMask(sq int) Bitboard {
 }
 
 func occupancyVariations(mask Bitboard) []Bitboard {
-	bits := []int{}
+	sqIndices := []int{}
 	for sq := 0; sq < 64; sq++ {
 		if mask&(Bitboard(1)<<sq) != 0 {
-			bits = append(bits, sq)
+			sqIndices = append(sqIndices, sq)
 		}
 	}
 
-	n := len(bits)
+	n := len(sqIndices)
 	count := 1 << n
 	variations := make([]Bitboard, count)
 
@@ -370,7 +370,7 @@ func occupancyVariations(mask Bitboard) []Bitboard {
 		occ := Bitboard(0)
 		for j := 0; j < n; j++ {
 			if i&(1<<j) != 0 {
-				occ |= Bitboard(1) << bits[j]
+				occ |= Bitboard(1) << sqIndices[j]
 			}
 		}
 		variations[i] = occ
