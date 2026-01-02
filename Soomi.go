@@ -2771,7 +2771,7 @@ func (p *Position) quiesce(alpha, beta, ply int, tc *TimeControl) int {
 }
 
 // Run a limited negamax for the singular move
-func (p *Position) negamaxSingular(depth, beta, ply int, tc *TimeControl, ss *[MaxDepth + 100]SearchStack, excluded Move, prevMove Move) int {
+func (p *Position) negamaxSingular(depth, beta, ply int, tc *TimeControl, ss *[MaxDepth]SearchStack, excluded Move, prevMove Move) int {
 	if depth <= 0 {
 		return p.quiesce(beta-1, beta, ply, tc)
 	}
@@ -2831,7 +2831,7 @@ func (p *Position) negamaxSingular(depth, beta, ply int, tc *TimeControl, ss *[M
    Condition: If Score >= Beta, we have a "Cutoff" (branch is too good, opponent won't allow it).
 */
 
-func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeControl, ss *[MaxDepth + 100]SearchStack, prevMove Move) int {
+func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeControl, ss *[MaxDepth]SearchStack, prevMove Move) int {
 	if ply >= MaxDepth {
 		return p.evaluate()
 	}
@@ -3147,7 +3147,7 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 
 func (p *Position) search(tc *TimeControl) Move {
 	var bestMove Move
-	var ss [MaxDepth + 100]SearchStack
+	var ss [MaxDepth]SearchStack
 
 	maxDepth := tc.depth
 	if maxDepth == 0 || tc.infinite {
