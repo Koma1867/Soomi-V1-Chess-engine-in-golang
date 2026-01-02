@@ -1041,74 +1041,51 @@ func (p *Position) setFEN(fen string) {
 	}
 	p.epSquare = -1
 	parts := strings.Fields(fen)
-	if len(parts) == 0 {
-		return
-	}
 
-	// 1. Set da pieces
-	ranks := strings.Split(parts[0], "/")
-	for r := 0; r < 8; r++ {
-		rank := 7 - r
+	// 1. Da pieces
+	for r, rank := range strings.Split(parts[0], "/") {
 		file := 0
-		for _, char := range ranks[r] {
-			if char >= '1' && char <= '8' {
-				file += int(char - '0')
-			} else {
-				sq := rank*8 + file
-				color := White
-				if char >= 'a' && char <= 'z' {
-					color = Black
-				}
-				pt := -1
-				switch strings.ToLower(string(char)) {
-				case "p":
-					pt = Pawn
-				case "n":
-					pt = Knight
-				case "b":
-					pt = Bishop
-				case "r":
-					pt = Rook
-				case "q":
-					pt = Queen
-				case "k":
-					pt = King
-				}
-				if pt != -1 {
-					p.pieces[color][pt] |= sqBB[sq]
-					p.occupied[color] |= sqBB[sq]
-					p.all |= sqBB[sq]
-					p.square[sq] = (color << 3) | pt
-					p.material[color] += pieceValues[pt]
-					p.psqScore[color] += pst[color][pt][sq]
-					p.psqScoreEG[color] += pstEnd[color][pt][sq]
-					p.hash ^= zobristPiece[color][pt][sq]
-				}
-				file++
+		for _, ch := range rank {
+			if ch >= '1' && ch <= '8' {
+				file += int(ch - '0')
+				continue
+			}
+			sq := (7-r)*8 + file
+			file++
+			color := White
+			if ch >= 'a' {
+				color = Black
+				ch -= 32
+			}
+			pt := strings.IndexByte("PNBRQK", byte(ch))
+			if pt < 0 {
+				continue
+			}
+			bb := sqBB[sq]
+			p.pieces[color][pt] |= bb
+			p.occupied[color] |= bb
+			p.all |= bb
+			p.square[sq] = (color << 3) | pt
+			p.material[color] += pieceValues[pt]
+			p.psqScore[color] += pst[color][pt][sq]
+			p.psqScoreEG[color] += pstEnd[color][pt][sq]
+			p.hash ^= zobristPiece[color][pt][sq]
+			if pt == Pawn {
+				p.pawnHash ^= zobristPiece[color][Pawn][sq]
 			}
 		}
 	}
 
-	if len(parts) < 2 {
-		return
-	}
-
-	// 2. Set da side to move
-	if parts[1] == "w" {
-		p.side = White
-	} else {
+	// 2. Side to move
+	if len(parts) >= 2 && parts[1] == "b" {
 		p.side = Black
 		p.hash ^= zobristSide
 	}
 
-	if len(parts) < 3 {
-		return
-	}
-
-	// 3. Set da castling
-	if parts[2] != "-" {
-		for _, char := range parts[2] {
-			switch char {
+	// 3. Castling
+	if len(parts) >= 3 {
+		for _, ch := range parts[2] {
+			switch ch {
 			case 'K':
 				p.castle |= 1
 				p.hash ^= zobristCastleWK
@@ -1125,38 +1102,24 @@ func (p *Position) setFEN(fen string) {
 		}
 	}
 
-	if len(parts) < 4 {
-		return
+	// 4. The french pawn-move
+	if len(parts) >= 4 && parts[3] != "-" {
+		f, r := int(parts[3][0]-'a'), int(parts[3][1]-'1')
+		p.epSquare = r*8 + f
+		p.hash ^= zobristEP[f]
 	}
 
-	// 4. Set da en passant
-	if parts[3] != "-" {
-		file := int(parts[3][0] - 'a')
-		rank := int(parts[3][1] - '1')
-		p.epSquare = rank*8 + file
-		p.hash ^= zobristEP[file]
+	// 5. Clock
+	if len(parts) >= 5 {
+		p.halfmove, _ = strconv.Atoi(parts[4])
 	}
 
-	if len(parts) < 5 {
-		return
-	}
-
-	// 5. Set da halfmove clock
-	p.halfmove, _ = strconv.Atoi(parts[4])
-
+	// Extras
+	p.kingSq[White] = bits.TrailingZeros64(uint64(p.pieces[White][King]))
+	p.kingSq[Black] = bits.TrailingZeros64(uint64(p.pieces[Black][King]))
 	p.historyKeys[0] = p.hash
 	p.historyPly = 0
 	p.lastIrreversible = 0
-
-	p.pawnHash = 0
-	for sq := 0; sq < 64; sq++ {
-		c, pt, ok := p.pieceAt(sq)
-		if ok && pt == Pawn {
-			p.pawnHash ^= zobristPiece[c][Pawn][sq]
-		}
-	}
-	p.kingSq[White] = bits.TrailingZeros64(uint64(p.pieces[White][King]))
-	p.kingSq[Black] = bits.TrailingZeros64(uint64(p.pieces[Black][King]))
 	p.computePhase()
 }
 
