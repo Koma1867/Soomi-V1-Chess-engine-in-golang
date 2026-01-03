@@ -103,38 +103,46 @@ type pawnEntry struct {
 }
 
 var (
-	pawnTable             []pawnEntry
-	pieceValues           = [6]int{100, 320, 300, 500, 900, 20000}
-	pst                   [2][6][64]int
-	pstEnd                [2][6][64]int
-	piecePhase            = [6]int{0, 1, 1, 2, 4, 0}
-	currentTC             atomic.Pointer[TimeControl]
-	searchWG              sync.WaitGroup
-	tt                    *TranspositionTable
-	rookMagics            [64]MagicEntry
-	bishopMagics          [64]MagicEntry
-	rookAttackTable       [102400]Bitboard
-	bishopAttackTable     [5248]Bitboard
-	passedPawnBonus       [8]int
-	isolatedPawnPenalty   int
-	doubledPawnPenalty    int
-	bonusBishopPair       int
-	bonusRookOpenFile     int
-	bonusRookSemiOpenFile int
-	bonusPawnShield       int
-	penaltyPawnStorm      int
-	bonusKnightOutpost    int
-	penaltyKingTropism    int
-	bonusRookOn7th        int
-	penaltyTrappedBishop  int
-	penaltyTrappedRook    int
-	mobilityBonus         [4][]int // Knight, Bishop, Rook, Queen
-	kingZoneMask          [64]Bitboard
-	kingAttackerWeight    [6]int // P, N, B, R, Q, K (P and K usually 0 or special)
-	history               [2][64][64]int
-	countermoves          [2][64][64]Move
-	lineBB                [64][64]Bitboard
-	lmrTable              [MaxDepth + 1][256]int
+	pawnTable         []pawnEntry
+	pieceValues       = [6]int{100, 320, 300, 500, 900, 20000}
+	pst               [2][6][64]int
+	pstEnd            [2][6][64]int
+	piecePhase        = [6]int{0, 1, 1, 2, 4, 0}
+	currentTC         atomic.Pointer[TimeControl]
+	searchWG          sync.WaitGroup
+	tt                *TranspositionTable
+	rookMagics        [64]MagicEntry
+	bishopMagics      [64]MagicEntry
+	rookAttackTable   [102400]Bitboard
+	bishopAttackTable [5248]Bitboard
+	passedPawnBonus   = [8]int{0, 10, 20, 40, 70, 110, 160, 0}
+	mobilityBonus     = [4][]int{
+		{-20, -10, 0, 10, 15, 20, 25, 30, 35},                                                                                  // Knight
+		{-20, -10, 0, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60},                                                              // Bishop
+		{-20, -10, 0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60},                                                           // Rook
+		{-40, -20, 0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 100, 105, 110, 115, 120, 125}, // Queen
+	}
+	kingZoneMask       [64]Bitboard
+	kingAttackerWeight = [6]int{0, 2, 2, 3, 5, 0} // P, N, B, R, Q, K (P and K usually 0 or special)
+	history            [2][64][64]int
+	countermoves       [2][64][64]Move
+	lineBB             [64][64]Bitboard
+	lmrTable           [MaxDepth + 1][256]int
+)
+
+const (
+	isolatedPawnPenalty   = 15
+	doubledPawnPenalty    = 10
+	bonusBishopPair       = 30
+	bonusRookOpenFile     = 20
+	bonusRookSemiOpenFile = 8
+	bonusPawnShield       = 10
+	penaltyPawnStorm      = 5
+	bonusKnightOutpost    = 20
+	penaltyKingTropism    = 2
+	bonusRookOn7th        = 20
+	penaltyTrappedBishop  = 50
+	penaltyTrappedRook    = 40
 )
 
 /*
@@ -653,27 +661,6 @@ func initLMR() {
 }
 
 func initEvaluation() {
-	passedPawnBonus = [8]int{0, 10, 20, 40, 70, 110, 160, 0}
-	isolatedPawnPenalty = 15
-	doubledPawnPenalty = 10
-	bonusBishopPair = 30
-	bonusRookOpenFile = 20
-	bonusRookSemiOpenFile = 8
-	bonusPawnShield = 10
-	penaltyPawnStorm = 5
-	bonusKnightOutpost = 20
-	penaltyKingTropism = 2
-	bonusRookOn7th = 20
-	penaltyTrappedBishop = 50
-	penaltyTrappedRook = 40
-
-	mobilityBonus[0] = []int{-20, -10, 0, 10, 15, 20, 25, 30, 35}                                                                                  // Knight
-	mobilityBonus[1] = []int{-20, -10, 0, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60}                                                              // Bishop
-	mobilityBonus[2] = []int{-20, -10, 0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60}                                                           // Rook
-	mobilityBonus[3] = []int{-40, -20, 0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 100, 105, 110, 115, 120, 125} // Queen
-
-	kingAttackerWeight = [6]int{0, 2, 2, 3, 5, 0}
-
 	for sq := 0; sq < 64; sq++ {
 		mask := Bitboard(0)
 		r, f := sq/8, sq%8
