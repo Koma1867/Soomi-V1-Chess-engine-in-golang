@@ -1194,9 +1194,6 @@ func bishopAttacks(sq int, occ Bitboard) Bitboard {
 }
 
 func (p *Position) isAttacked(sq, bySide int, occ Bitboard) bool {
-	if sq < 0 || sq >= 64 {
-		return false
-	}
 	if pawnAttacks[bySide^1][sq]&p.pieces[bySide][Pawn] != 0 {
 		return true
 	}
@@ -3817,4 +3814,4 @@ func main() {
 }
 
 // To make an executable
-// go build -trimpath -ldflags "-s -w" -gcflags "all=-B" -o Soomi-V1.2.0.exe soomi.go
+// set GOAMD64=v3 && go build -trimpath -ldflags "-s -w" -gcflags "all=-B" -o Soomi-V1.2.0.exe soomi.go
