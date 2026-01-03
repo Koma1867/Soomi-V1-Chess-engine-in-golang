@@ -667,10 +667,10 @@ func initEvaluation() {
 	penaltyTrappedBishop = 50
 	penaltyTrappedRook = 40
 
-	mobilityBonus[0] = []int{-20, -10, 0, 10, 15, 20, 25, 30, 35}                                                                             // Knight
-	mobilityBonus[1] = []int{-20, -10, 0, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60}                                                         // Bishop
-	mobilityBonus[2] = []int{-20, -10, 0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60}                                                      // Rook
-	mobilityBonus[3] = []int{-40, -20, 0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 100, 105, 110, 115, 120} // Queen
+	mobilityBonus[0] = []int{-20, -10, 0, 10, 15, 20, 25, 30, 35}                                                                                  // Knight
+	mobilityBonus[1] = []int{-20, -10, 0, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60}                                                              // Bishop
+	mobilityBonus[2] = []int{-20, -10, 0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60}                                                           // Rook
+	mobilityBonus[3] = []int{-40, -20, 0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 100, 105, 110, 115, 120, 125} // Queen
 
 	kingAttackerWeight = [6]int{0, 2, 2, 3, 5, 0}
 
@@ -2082,29 +2082,29 @@ func (p *Position) evalMobility() (mg, eg int) {
 		sq := popLSB(&bb)
 		attacks := knightAttacks[sq] & ^p.occupied[White] & ^dangerW
 		cnt := bits.OnesCount64(uint64(attacks))
-		mg += mobilityBonus[0][min(cnt, len(mobilityBonus[0])-1)]
-		eg += mobilityBonus[0][min(cnt, len(mobilityBonus[0])-1)]
+		mg += mobilityBonus[0][cnt]
+		eg += mobilityBonus[0][cnt]
 	}
 	for bb := p.pieces[White][Bishop]; bb != 0; {
 		sq := popLSB(&bb)
 		attacks := bishopAttacks(sq, occupied) & ^p.occupied[White] & ^dangerW
 		cnt := bits.OnesCount64(uint64(attacks))
-		mg += mobilityBonus[1][min(cnt, len(mobilityBonus[1])-1)]
-		eg += mobilityBonus[1][min(cnt, len(mobilityBonus[1])-1)]
+		mg += mobilityBonus[1][cnt]
+		eg += mobilityBonus[1][cnt]
 	}
 	for bb := p.pieces[White][Rook]; bb != 0; {
 		sq := popLSB(&bb)
 		attacks := rookAttacks(sq, occupied) & ^p.occupied[White] & ^dangerW
 		cnt := bits.OnesCount64(uint64(attacks))
-		mg += mobilityBonus[2][min(cnt, len(mobilityBonus[2])-1)]
-		eg += mobilityBonus[2][min(cnt, len(mobilityBonus[2])-1)]
+		mg += mobilityBonus[2][cnt]
+		eg += mobilityBonus[2][cnt]
 	}
 	for bb := p.pieces[White][Queen]; bb != 0; {
 		sq := popLSB(&bb)
 		attacks := (bishopAttacks(sq, occupied) | rookAttacks(sq, occupied)) & ^p.occupied[White] & ^dangerW
 		cnt := bits.OnesCount64(uint64(attacks))
-		mg += mobilityBonus[3][min(cnt, len(mobilityBonus[3])-1)]
-		eg += mobilityBonus[3][min(cnt, len(mobilityBonus[3])-1)]
+		mg += mobilityBonus[3][cnt]
+		eg += mobilityBonus[3][cnt]
 	}
 
 	// Blik mobility
@@ -2112,31 +2112,30 @@ func (p *Position) evalMobility() (mg, eg int) {
 		sq := popLSB(&bb)
 		attacks := knightAttacks[sq] & ^p.occupied[Black] & ^dangerB
 		cnt := bits.OnesCount64(uint64(attacks))
-		mg -= mobilityBonus[0][min(cnt, len(mobilityBonus[0])-1)]
-		eg -= mobilityBonus[0][min(cnt, len(mobilityBonus[0])-1)]
+		mg -= mobilityBonus[0][cnt]
+		eg -= mobilityBonus[0][cnt]
 	}
 	for bb := p.pieces[Black][Bishop]; bb != 0; {
 		sq := popLSB(&bb)
 		attacks := bishopAttacks(sq, occupied) & ^p.occupied[Black] & ^dangerB
 		cnt := bits.OnesCount64(uint64(attacks))
-		mg -= mobilityBonus[1][min(cnt, len(mobilityBonus[1])-1)]
-		eg -= mobilityBonus[1][min(cnt, len(mobilityBonus[1])-1)]
+		mg -= mobilityBonus[1][cnt]
+		eg -= mobilityBonus[1][cnt]
 	}
 	for bb := p.pieces[Black][Rook]; bb != 0; {
 		sq := popLSB(&bb)
 		attacks := rookAttacks(sq, occupied) & ^p.occupied[Black] & ^dangerB
 		cnt := bits.OnesCount64(uint64(attacks))
-		mg -= mobilityBonus[2][min(cnt, len(mobilityBonus[2])-1)]
-		eg -= mobilityBonus[2][min(cnt, len(mobilityBonus[2])-1)]
+		mg -= mobilityBonus[2][cnt]
+		eg -= mobilityBonus[2][cnt]
 	}
 	for bb := p.pieces[Black][Queen]; bb != 0; {
 		sq := popLSB(&bb)
 		attacks := (bishopAttacks(sq, occupied) | rookAttacks(sq, occupied)) & ^p.occupied[Black] & ^dangerB
 		cnt := bits.OnesCount64(uint64(attacks))
-		mg -= mobilityBonus[3][min(cnt, len(mobilityBonus[3])-1)]
-		eg -= mobilityBonus[3][min(cnt, len(mobilityBonus[3])-1)]
+		mg -= mobilityBonus[3][cnt]
+		eg -= mobilityBonus[3][cnt]
 	}
-
 	return mg, eg
 }
 
