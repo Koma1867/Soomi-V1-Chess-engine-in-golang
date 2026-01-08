@@ -1120,9 +1120,6 @@ func initLineBB() {
 
 func (p *Position) getPins(side int) Bitboard {
 	kingSq := p.kingSq[side]
-	if kingSq >= 64 {
-		return 0
-	}
 	them := side ^ 1
 	pinned := Bitboard(0)
 
@@ -1189,9 +1186,6 @@ func (p *Position) isAttacked(sq, bySide int, occ Bitboard) bool {
 
 func (p *Position) inCheck() bool {
 	kingSq := p.kingSq[p.side]
-	if kingSq >= 64 {
-		return false
-	}
 	return p.isAttacked(kingSq, p.side^1, p.all)
 }
 
