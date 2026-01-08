@@ -2115,69 +2115,65 @@ func (p *Position) evalKingSafety() int {
 	whiteKingSq := p.kingSq[White]
 	blackKingSq := p.kingSq[Black]
 
-	if whiteKingSq < 64 {
-		zone := kingZoneMask[whiteKingSq]
-		attackers := 0
-		attackUnits := 0
-		for pt := Knight; pt <= Queen; pt++ {
-			bb := p.pieces[Black][pt]
-			for bb != 0 {
-				sq := popLSB(&bb)
-				var attacks Bitboard
-				switch pt {
-				case Knight:
-					attacks = knightAttacks[sq]
-				case Bishop:
-					attacks = bishopAttacks(sq, p.all)
-				case Rook:
-					attacks = rookAttacks(sq, p.all)
-				case Queen:
-					attacks = bishopAttacks(sq, p.all) | rookAttacks(sq, p.all)
-				}
-				if attacks&zone != 0 {
-					attackers++
-					attackUnits += kingAttackerWeight[pt]
-				}
+	zone := kingZoneMask[whiteKingSq]
+	attackers := 0
+	attackUnits := 0
+	for pt := Knight; pt <= Queen; pt++ {
+		bb := p.pieces[Black][pt]
+		for bb != 0 {
+			sq := popLSB(&bb)
+			var attacks Bitboard
+			switch pt {
+			case Knight:
+				attacks = knightAttacks[sq]
+			case Bishop:
+				attacks = bishopAttacks(sq, p.all)
+			case Rook:
+				attacks = rookAttacks(sq, p.all)
+			case Queen:
+				attacks = bishopAttacks(sq, p.all) | rookAttacks(sq, p.all)
+			}
+			if attacks&zone != 0 {
+				attackers++
+				attackUnits += kingAttackerWeight[pt]
 			}
 		}
-		if attackers > 1 {
-			mg -= (attackUnits * attackUnits)
-		}
-		// Pawn shield
-		mg += p.evalPawnShield(White, whiteKingSq)
 	}
+	if attackers > 1 {
+		mg -= (attackUnits * attackUnits)
+	}
+	// Pawn shield
+	mg += p.evalPawnShield(White, whiteKingSq)
 
-	if blackKingSq < 64 {
-		zone := kingZoneMask[blackKingSq]
-		attackers := 0
-		attackUnits := 0
-		for pt := Knight; pt <= Queen; pt++ {
-			bb := p.pieces[White][pt]
-			for bb != 0 {
-				sq := popLSB(&bb)
-				var attacks Bitboard
-				switch pt {
-				case Knight:
-					attacks = knightAttacks[sq]
-				case Bishop:
-					attacks = bishopAttacks(sq, p.all)
-				case Rook:
-					attacks = rookAttacks(sq, p.all)
-				case Queen:
-					attacks = bishopAttacks(sq, p.all) | rookAttacks(sq, p.all)
-				}
-				if attacks&zone != 0 {
-					attackers++
-					attackUnits += kingAttackerWeight[pt]
-				}
+	zone = kingZoneMask[blackKingSq]
+	attackers = 0
+	attackUnits = 0
+	for pt := Knight; pt <= Queen; pt++ {
+		bb := p.pieces[White][pt]
+		for bb != 0 {
+			sq := popLSB(&bb)
+			var attacks Bitboard
+			switch pt {
+			case Knight:
+				attacks = knightAttacks[sq]
+			case Bishop:
+				attacks = bishopAttacks(sq, p.all)
+			case Rook:
+				attacks = rookAttacks(sq, p.all)
+			case Queen:
+				attacks = bishopAttacks(sq, p.all) | rookAttacks(sq, p.all)
+			}
+			if attacks&zone != 0 {
+				attackers++
+				attackUnits += kingAttackerWeight[pt]
 			}
 		}
-		if attackers > 1 {
-			mg += (attackUnits * attackUnits)
-		}
-		// Pawn shield
-		mg -= p.evalPawnShield(Black, blackKingSq)
 	}
+	if attackers > 1 {
+		mg += (attackUnits * attackUnits)
+	}
+	// Pawn shield
+	mg -= p.evalPawnShield(Black, blackKingSq)
 
 	return mg
 }
@@ -2223,28 +2219,24 @@ func (p *Position) evalPawnStorm() int {
 	whiteKingSq := p.kingSq[White]
 	blackKingSq := p.kingSq[Black]
 
-	if whiteKingSq < 64 {
-		kf := whiteKingSq % 8
-		for bb := p.pieces[Black][Pawn]; bb != 0; {
-			sq := popLSB(&bb)
-			if abs(sq%8-kf) <= 1 {
-				dist := (sq / 8) - (whiteKingSq / 8)
-				if dist > 0 {
-					score -= penaltyPawnStorm * (6 - dist)
-				}
+	kf := whiteKingSq % 8
+	for bb := p.pieces[Black][Pawn]; bb != 0; {
+		sq := popLSB(&bb)
+		if abs(sq%8-kf) <= 1 {
+			dist := (sq / 8) - (whiteKingSq / 8)
+			if dist > 0 {
+				score -= penaltyPawnStorm * (6 - dist)
 			}
 		}
 	}
 
-	if blackKingSq < 64 {
-		kf := blackKingSq % 8
-		for bb := p.pieces[White][Pawn]; bb != 0; {
-			sq := popLSB(&bb)
-			if abs(sq%8-kf) <= 1 {
-				dist := (blackKingSq / 8) - (sq / 8)
-				if dist > 0 {
-					score += penaltyPawnStorm * (6 - dist)
-				}
+	kf = blackKingSq % 8
+	for bb := p.pieces[White][Pawn]; bb != 0; {
+		sq := popLSB(&bb)
+		if abs(sq%8-kf) <= 1 {
+			dist := (blackKingSq / 8) - (sq / 8)
+			if dist > 0 {
+				score += penaltyPawnStorm * (6 - dist)
 			}
 		}
 	}
@@ -2314,24 +2306,20 @@ func (p *Position) evalTropism() int {
 	whiteKingSq := p.kingSq[White]
 	blackKingSq := p.kingSq[Black]
 
-	if whiteKingSq < 64 {
-		wr, wf := whiteKingSq/8, whiteKingSq%8
-		attackers := p.occupied[Black] &^ (p.pieces[Black][Pawn] | p.pieces[Black][King])
-		for attackers != 0 {
-			sq := popLSB(&attackers)
-			dist := abs(sq/8-wr) + abs(sq%8-wf)
-			score -= penaltyKingTropism * (14 - dist)
-		}
+	wr, wf := whiteKingSq/8, whiteKingSq%8
+	attackers := p.occupied[Black] &^ (p.pieces[Black][Pawn] | p.pieces[Black][King])
+	for attackers != 0 {
+		sq := popLSB(&attackers)
+		dist := abs(sq/8-wr) + abs(sq%8-wf)
+		score -= penaltyKingTropism * (14 - dist)
 	}
 
-	if blackKingSq < 64 {
-		br, bf := blackKingSq/8, blackKingSq%8
-		attackers := p.occupied[White] &^ (p.pieces[White][Pawn] | p.pieces[White][King])
-		for attackers != 0 {
-			sq := popLSB(&attackers)
-			dist := abs(sq/8-br) + abs(sq%8-bf)
-			score += penaltyKingTropism * (14 - dist)
-		}
+	br, bf := blackKingSq/8, blackKingSq%8
+	attackers = p.occupied[White] &^ (p.pieces[White][Pawn] | p.pieces[White][King])
+	for attackers != 0 {
+		sq := popLSB(&attackers)
+		dist := abs(sq/8-br) + abs(sq%8-bf)
+		score += penaltyKingTropism * (14 - dist)
 	}
 
 	return score
