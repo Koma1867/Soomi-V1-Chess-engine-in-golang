@@ -130,6 +130,10 @@ var (
 	lmrTable           [MaxDepth + 1][256]int
 	lvaOrder           = [6]int{Pawn, Bishop, Knight, Rook, Queen, King}
 	castleMask         [64]int
+	pawnShieldMask     [2][64]Bitboard
+	fileMasks          [8]Bitboard
+	rankMasks          [8]Bitboard
+	passedPawnMask     [2][64]Bitboard
 )
 
 const (
@@ -635,6 +639,8 @@ func init() {
 	initPST()
 	initZobrist()
 	initSqBB()
+	initPawnShield()
+	initPassedPawnMask()
 	initAttacks()
 	initMagicBitboards()
 	initLineBB()
@@ -642,6 +648,57 @@ func init() {
 	initLMR()
 	InitTT(defaultTTSizeMB)
 	pawnTable = make([]pawnEntry, pawnTableSize)
+}
+
+func initPassedPawnMask() {
+	for sq := 0; sq < 64; sq++ {
+		f := sq % 8
+		r := sq / 8
+		// White
+		for nr := r + 1; nr < 8; nr++ {
+			passedPawnMask[White][sq] |= sqBB[nr*8+f]
+			if f > 0 {
+				passedPawnMask[White][sq] |= sqBB[nr*8+f-1]
+			}
+			if f < 7 {
+				passedPawnMask[White][sq] |= sqBB[nr*8+f+1]
+			}
+		}
+		// Black
+		for nr := r - 1; nr >= 0; nr-- {
+			passedPawnMask[Black][sq] |= sqBB[nr*8+f]
+			if f > 0 {
+				passedPawnMask[Black][sq] |= sqBB[nr*8+f-1]
+			}
+			if f < 7 {
+				passedPawnMask[Black][sq] |= sqBB[nr*8+f+1]
+			}
+		}
+	}
+}
+
+func initPawnShield() {
+	for sq := 0; sq < 64; sq++ {
+		r, f := sq/8, sq%8
+		// White
+		if r <= 2 {
+			fStart := max(0, f-1)
+			fEnd := min(7, f+1)
+			for nf := fStart; nf <= fEnd; nf++ {
+				pawnShieldMask[White][sq] |= sqBB[(r+1)*8+nf]
+				pawnShieldMask[White][sq] |= sqBB[(r+2)*8+nf]
+			}
+		}
+		// Black
+		if r >= 5 {
+			fStart := max(0, f-1)
+			fEnd := min(7, f+1)
+			for nf := fStart; nf <= fEnd; nf++ {
+				pawnShieldMask[Black][sq] |= sqBB[(r-1)*8+nf]
+				pawnShieldMask[Black][sq] |= sqBB[(r-2)*8+nf]
+			}
+		}
+	}
 }
 
 func initCastleMask() {
@@ -663,6 +720,11 @@ func initLMR() {
 }
 
 func initEvaluation() {
+	for i := 0; i < 8; i++ {
+		fileMasks[i] = 0x0101010101010101 << i
+		rankMasks[i] = 0xFF << (i * 8)
+	}
+
 	for sq := 0; sq < 64; sq++ {
 		mask := Bitboard(0)
 		r, f := sq/8, sq%8
@@ -1912,17 +1974,17 @@ func (p *Position) evalPawns() (mg, eg int) {
 		rank := sq / 8
 
 		// Doubled
-		if (whitePawns&(Bitboard(0x0101010101010101)<<file)) & ^sqBB[sq] != 0 {
+		if (whitePawns&fileMasks[file]) & ^sqBB[sq] != 0 {
 			mg -= doubledPawnPenalty
 			eg -= doubledPawnPenalty
 		}
 
 		// Isolated
 		isolated := true
-		if file > 0 && (whitePawns&(Bitboard(0x0101010101010101)<<(file-1))) != 0 {
+		if file > 0 && (whitePawns&fileMasks[file-1]) != 0 {
 			isolated = false
 		}
-		if file < 7 && (whitePawns&(Bitboard(0x0101010101010101)<<(file+1))) != 0 {
+		if file < 7 && (whitePawns&fileMasks[file+1]) != 0 {
 			isolated = false
 		}
 		if isolated {
@@ -1931,17 +1993,7 @@ func (p *Position) evalPawns() (mg, eg int) {
 		}
 
 		// Passed
-		mask := Bitboard(0)
-		for r := rank + 1; r < 8; r++ {
-			mask |= sqBB[r*8+file]
-			if file > 0 {
-				mask |= sqBB[r*8+file-1]
-			}
-			if file < 7 {
-				mask |= sqBB[r*8+file+1]
-			}
-		}
-		if (blackPawns & mask) == 0 {
+		if (blackPawns & passedPawnMask[White][sq]) == 0 {
 			mg += passedPawnBonus[rank] / 2
 			eg += passedPawnBonus[rank]
 		}
@@ -1955,17 +2007,17 @@ func (p *Position) evalPawns() (mg, eg int) {
 		revRank := 7 - rank
 
 		// Doubled
-		if (blackPawns&(Bitboard(0x0101010101010101)<<file)) & ^sqBB[sq] != 0 {
+		if (blackPawns&fileMasks[file]) & ^sqBB[sq] != 0 {
 			mg += doubledPawnPenalty
 			eg += doubledPawnPenalty
 		}
 
 		// Isolated
 		isolated := true
-		if file > 0 && (blackPawns&(Bitboard(0x0101010101010101)<<(file-1))) != 0 {
+		if file > 0 && (blackPawns&fileMasks[file-1]) != 0 {
 			isolated = false
 		}
-		if file < 7 && (blackPawns&(Bitboard(0x0101010101010101)<<(file+1))) != 0 {
+		if file < 7 && (blackPawns&fileMasks[file+1]) != 0 {
 			isolated = false
 		}
 		if isolated {
@@ -1974,17 +2026,7 @@ func (p *Position) evalPawns() (mg, eg int) {
 		}
 
 		// Passed
-		mask := Bitboard(0)
-		for r := rank - 1; r >= 0; r-- {
-			mask |= sqBB[r*8+file]
-			if file > 0 {
-				mask |= sqBB[r*8+file-1]
-			}
-			if file < 7 {
-				mask |= sqBB[r*8+file+1]
-			}
-		}
-		if (whitePawns & mask) == 0 {
+		if (whitePawns & passedPawnMask[Black][sq]) == 0 {
 			mg -= passedPawnBonus[revRank] / 2
 			eg -= passedPawnBonus[revRank]
 		}
@@ -2134,39 +2176,8 @@ func (p *Position) evalKingSafety() int {
 }
 
 func (p *Position) evalPawnShield(side int, kingSq int) int {
-	score := 0
-	r, f := kingSq/8, kingSq%8
 	pawns := p.pieces[side][Pawn]
-
-	if side == White {
-		// Only if king is on back rank
-		if r <= 2 {
-			fStart := max(0, f-1)
-			fEnd := min(7, f+1)
-			for nf := fStart; nf <= fEnd; nf++ {
-				if (pawns & sqBB[(r+1)*8+nf]) != 0 {
-					score += bonusPawnShield
-				}
-				if (pawns & sqBB[(r+2)*8+nf]) != 0 {
-					score += bonusPawnShield
-				}
-			}
-		}
-	} else {
-		if r >= 5 {
-			fStart := max(0, f-1)
-			fEnd := min(7, f+1)
-			for nf := fStart; nf <= fEnd; nf++ {
-				if (pawns & sqBB[(r-1)*8+nf]) != 0 {
-					score += bonusPawnShield
-				}
-				if (pawns & sqBB[(r-2)*8+nf]) != 0 {
-					score += bonusPawnShield
-				}
-			}
-		}
-	}
-	return score
+	return bits.OnesCount64(uint64(pawns&pawnShieldMask[side][kingSq])) * bonusPawnShield
 }
 
 func (p *Position) evalPawnStorm() int {
@@ -2283,43 +2294,46 @@ func (p *Position) evalRooksOnFiles() int {
 	score := 0
 	whiteKingSq := p.kingSq[White]
 	blackKingSq := p.kingSq[Black]
+	wPawns := p.pieces[White][Pawn]
+	bPawns := p.pieces[Black][Pawn]
 
-	for bb := p.pieces[White][Rook]; bb != 0; {
-		sq := popLSB(&bb)
-		file := sq % 8
-		rank := sq / 8
-		fileBB := Bitboard(0x0101010101010101) << file
-		if (p.pieces[White][Pawn] & fileBB) == 0 {
-			if (p.pieces[Black][Pawn] & fileBB) == 0 {
-				score += bonusRookOpenFile
-			} else {
-				score += bonusRookSemiOpenFile
-			}
-		}
-		if rank == 6 {
-			if blackKingSq >= 56 {
-				score += bonusRookOn7th
-			}
-		}
+	wPawnFiles := wPawns
+	wPawnFiles |= wPawnFiles << 8
+	wPawnFiles |= wPawnFiles << 16
+	wPawnFiles |= wPawnFiles << 32
+	wPawnFiles |= wPawnFiles >> 8
+	wPawnFiles |= wPawnFiles >> 16
+	wPawnFiles |= wPawnFiles >> 32
+
+	bPawnFiles := bPawns
+	bPawnFiles |= bPawnFiles << 8
+	bPawnFiles |= bPawnFiles << 16
+	bPawnFiles |= bPawnFiles << 32
+	bPawnFiles |= bPawnFiles >> 8
+	bPawnFiles |= bPawnFiles >> 16
+	bPawnFiles |= bPawnFiles >> 32
+
+	wRooks := p.pieces[White][Rook]
+	bRooks := p.pieces[Black][Rook]
+
+	open := wRooks &^ (wPawnFiles | bPawnFiles)
+	score += bits.OnesCount64(uint64(open)) * bonusRookOpenFile
+
+	semi := (wRooks &^ wPawnFiles) & bPawnFiles
+	score += bits.OnesCount64(uint64(semi)) * bonusRookSemiOpenFile
+
+	if blackKingSq >= 56 {
+		rooksOn7th := wRooks & rankMasks[6]
+		score += bits.OnesCount64(uint64(rooksOn7th)) * bonusRookOn7th
 	}
 
-	for bb := p.pieces[Black][Rook]; bb != 0; {
-		sq := popLSB(&bb)
-		file := sq % 8
-		rank := sq / 8
-		fileBB := Bitboard(0x0101010101010101) << file
-		if (p.pieces[Black][Pawn] & fileBB) == 0 {
-			if (p.pieces[White][Pawn] & fileBB) == 0 {
-				score -= bonusRookOpenFile
-			} else {
-				score -= bonusRookSemiOpenFile
-			}
-		}
-		if rank == 1 {
-			if whiteKingSq <= 7 {
-				score -= bonusRookOn7th
-			}
-		}
+	open = bRooks &^ (wPawnFiles | bPawnFiles)
+	score -= bits.OnesCount64(uint64(open)) * bonusRookOpenFile
+	semi = (bRooks &^ bPawnFiles) & wPawnFiles
+	score -= bits.OnesCount64(uint64(semi)) * bonusRookSemiOpenFile
+	if whiteKingSq <= 7 {
+		rooksOn7th := bRooks & rankMasks[1]
+		score -= bits.OnesCount64(uint64(rooksOn7th)) * bonusRookOn7th
 	}
 	return score
 }
