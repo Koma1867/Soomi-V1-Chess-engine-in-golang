@@ -1410,13 +1410,8 @@ func (p *Position) isLegal(m Move) bool {
 	}
 	pt := p.square[from] & 7
 	fromBB, toBB := sqBB[from], sqBB[to]
-	tP := p.pieces[them][Pawn]
-	tN := p.pieces[them][Knight]
-	tB := p.pieces[them][Bishop]
-	tR := p.pieces[them][Rook]
-	tQ := p.pieces[them][Queen]
-	tK := p.pieces[them][King]
 
+	capBB := Bitboard(0)
 	if m.isCapture() {
 		capSq := to
 		if flags == FlagEP {
@@ -1426,12 +1421,7 @@ func (p *Position) isLegal(m Move) bool {
 				capSq = to + 8
 			}
 		}
-		capBB := sqBB[capSq]
-		tP &^= capBB
-		tN &^= capBB
-		tB &^= capBB
-		tR &^= capBB
-		tQ &^= capBB
+		capBB = sqBB[capSq]
 	}
 
 	occ2 := p.all&^fromBB | toBB
@@ -1449,19 +1439,19 @@ func (p *Position) isLegal(m Move) bool {
 		kingSq = p.kingSq[us]
 	}
 
-	if pawnAttacks[them^1][kingSq]&tP != 0 {
+	if pawnAttacks[them^1][kingSq]&(p.pieces[them][Pawn]&^capBB) != 0 {
 		return false
 	}
-	if knightAttacks[kingSq]&tN != 0 {
+	if knightAttacks[kingSq]&(p.pieces[them][Knight]&^capBB) != 0 {
 		return false
 	}
-	if bishopAttacks(kingSq, occ2)&(tB|tQ) != 0 {
+	if bishopAttacks(kingSq, occ2)&((p.pieces[them][Bishop]|p.pieces[them][Queen])&^capBB) != 0 {
 		return false
 	}
-	if rookAttacks(kingSq, occ2)&(tR|tQ) != 0 {
+	if rookAttacks(kingSq, occ2)&((p.pieces[them][Rook]|p.pieces[them][Queen])&^capBB) != 0 {
 		return false
 	}
-	if kingAttacks[kingSq]&tK != 0 {
+	if kingAttacks[kingSq]&p.pieces[them][King] != 0 {
 		return false
 	}
 	return true
@@ -1856,7 +1846,6 @@ func (p *Position) seeIterative(from, to, pieceAfterFirst, gain0 int, pins [2]Bi
 	occ &^= sqBB[from]
 	// Any move can uncover X-ray sliders
 	att |= p.getXrayAttackers(to, occ)
-
 	us ^= 1
 	for {
 		d++
