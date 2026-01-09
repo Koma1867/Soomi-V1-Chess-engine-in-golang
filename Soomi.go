@@ -128,6 +128,7 @@ var (
 	countermoves       [2][64][64]Move
 	lineBB             [64][64]Bitboard
 	lmrTable           [MaxDepth + 1][256]int
+	lvaOrder           = [6]int{Pawn, Bishop, Knight, Rook, Queen, King}
 )
 
 const (
@@ -1394,9 +1395,6 @@ func (p *Position) isLegal(m Move) bool {
 	us, them := p.side, p.side^1
 	flags := m.flags()
 	if flags == FlagCastle {
-		if p.isAttacked(from, them, p.all) {
-			return false
-		}
 		if to > from {
 			// King side castle: check squares from+1 and from+2 (e.g., 5 & 6 or 61 & 62)
 			if p.isAttacked(from+1, them, p.all) || p.isAttacked(from+2, them, p.all) {
@@ -1863,15 +1861,10 @@ func (p *Position) seeIterative(from, to, pieceAfterFirst, gain0 int, pins [2]Bi
 	for {
 		d++
 		myAtt := att & p.occupied[us]
-		if myAtt == 0 {
-			break
-		}
-
 		var pt int
 		var attSq int
 		found := false
 		// Find smallest attacker for 'us'
-		lvaOrder := [6]int{Pawn, Bishop, Knight, Rook, Queen, King}
 		for _, pType := range lvaOrder {
 			subset := myAtt & p.pieces[us][pType]
 			if subset != 0 {
