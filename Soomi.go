@@ -1125,20 +1125,22 @@ func (p *Position) getPins(side int) Bitboard {
 	pinned := Bitboard(0)
 
 	// Orthogonal pinners
+	atkK := rookAttacks(kingSq, p.all)
 	pinnersR := (p.pieces[them][Rook] | p.pieces[them][Queen]) & rookAttacks(kingSq, 0)
 	for pinnersR != 0 {
 		sq := popLSB(&pinnersR)
-		between := rookAttacks(kingSq, p.all) & rookAttacks(sq, p.all)
+		between := atkK & rookAttacks(sq, p.all)
 		if bits.OnesCount64(uint64(between&p.occupied[side])) == 1 {
 			pinned |= between & p.occupied[side]
 		}
 	}
 
 	// Diagonal pinners
+	atkKB := bishopAttacks(kingSq, p.all)
 	pinnersB := (p.pieces[them][Bishop] | p.pieces[them][Queen]) & bishopAttacks(kingSq, 0)
 	for pinnersB != 0 {
 		sq := popLSB(&pinnersB)
-		between := bishopAttacks(kingSq, p.all) & bishopAttacks(sq, p.all)
+		between := atkKB & bishopAttacks(sq, p.all)
 		if bits.OnesCount64(uint64(between&p.occupied[side])) == 1 {
 			pinned |= between & p.occupied[side]
 		}
@@ -2229,6 +2231,7 @@ func (p *Position) evalOutposts() (mg, eg int) {
 	// Knight and Bishop outposts
 	for side := White; side <= Black; side++ {
 		enemy := side ^ 1
+		enemyPawns := p.pieces[enemy][Pawn]
 		for _, pt := range []int{Knight, Bishop} {
 			for bb := p.pieces[side][pt]; bb != 0; {
 				sq := popLSB(&bb)
@@ -2238,8 +2241,6 @@ func (p *Position) evalOutposts() (mg, eg int) {
 				if (side == White && r >= 3 && r <= 5) || (side == Black && r >= 2 && r <= 4) {
 					// Check for pawn support (aww)
 					if (pawnAttacks[side^1][sq] & p.pieces[side][Pawn]) != 0 {
-						// Check if can be attacked by enemy pawn that hasn't passed this rank
-						enemyPawns := p.pieces[enemy][Pawn]
 						// Use bit mask for faaasst check
 						var attackMask Bitboard
 						if side == White {
@@ -2437,14 +2438,13 @@ func (p *Position) evaluate() int {
 	mgScore += trapped
 
 	// Tempo
-	tempoMG, tempoEG := 0, 0
+	tempoMG := 0
 	if p.side == White {
-		tempoMG, tempoEG = 20, 0
+		tempoMG = 20
 	} else {
-		tempoMG, tempoEG = -20, 0
+		tempoMG = -20
 	}
 	mgScore += tempoMG
-	egScore += tempoEG
 	ph := p.phase
 	if ph < 0 {
 		ph = 0
