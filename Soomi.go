@@ -129,6 +129,7 @@ var (
 	lineBB             [64][64]Bitboard
 	lmrTable           [MaxDepth + 1][256]int
 	lvaOrder           = [6]int{Pawn, Bishop, Knight, Rook, Queen, King}
+	castleMask         [64]int
 )
 
 const (
@@ -630,6 +631,7 @@ func (t *TranspositionTable) Save(key uint64, mv Move, score int, depth int, fla
 }
 
 func init() {
+	initCastleMask()
 	initPST()
 	initZobrist()
 	initSqBB()
@@ -640,6 +642,15 @@ func init() {
 	initLMR()
 	InitTT(defaultTTSizeMB)
 	pawnTable = make([]pawnEntry, pawnTableSize)
+}
+
+func initCastleMask() {
+	for i := 0; i < 64; i++ {
+		castleMask[i] = 15
+	}
+	castleMask[0], castleMask[7] = 13, 14
+	castleMask[56], castleMask[63] = 7, 11
+	castleMask[4], castleMask[60] = 12, 3
 }
 
 func initLMR() {
@@ -1426,14 +1437,7 @@ func (p *Position) isLegal(m Move) bool {
 		capBB = sqBB[capSq]
 	}
 
-	occ2 := p.all&^fromBB | toBB
-	if flags == FlagEP {
-		if us == White {
-			occ2 &^= sqBB[to-8]
-		} else {
-			occ2 &^= sqBB[to+8]
-		}
-	}
+	occ2 := (p.all &^ fromBB &^ capBB) | toBB
 	var kingSq int
 	if pt == King {
 		kingSq = to
@@ -1491,19 +1495,6 @@ func (p *Position) makeMove(m Move) Undo {
 		}
 		capturedPiece := p.square[capSq] & 7
 		undo.captured = capturedPiece
-
-		if capturedPiece == Rook {
-			switch capSq {
-			case 0:
-				p.castle &^= 2
-			case 7:
-				p.castle &^= 1
-			case 56:
-				p.castle &^= 8
-			case 63:
-				p.castle &^= 4
-			}
-		}
 
 		bb := sqBB[capSq]
 		p.pieces[them][capturedPiece] &^= bb
@@ -1613,25 +1604,7 @@ func (p *Position) makeMove(m Move) Undo {
 		}
 	}
 
-	switch movingPiece {
-	case King:
-		if us == White {
-			p.castle &^= 3
-		} else {
-			p.castle &^= 12
-		}
-	case Rook:
-		switch from {
-		case 0:
-			p.castle &^= 2
-		case 7:
-			p.castle &^= 1
-		case 56:
-			p.castle &^= 8
-		case 63:
-			p.castle &^= 4
-		}
-	}
+	p.castle &= castleMask[from] & castleMask[to]
 
 	changedCastle := undo.castle ^ p.castle
 	if changedCastle&1 != 0 {
