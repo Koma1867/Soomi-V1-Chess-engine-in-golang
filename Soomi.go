@@ -1351,20 +1351,18 @@ func (p *Position) generateMovesTo(buf []Move, capturesOnly bool) int {
 
 	// da king moves
 	kingSq := p.kingSq[us]
-	if kingSq < 64 {
-		attacks := kingAttacks[kingSq] & ^occUs
-		if capturesOnly {
-			attacks &= occThem
+	attacks := kingAttacks[kingSq] & ^occUs
+	if capturesOnly {
+		attacks &= occThem
+	}
+	for att := attacks; att != 0; {
+		to := popLSB(&att)
+		flag := FlagQuiet
+		if (occThem & sqBB[to]) != 0 {
+			flag = FlagCapture
 		}
-		for att := attacks; att != 0; {
-			to := popLSB(&att)
-			flag := FlagQuiet
-			if (occThem & sqBB[to]) != 0 {
-				flag = FlagCapture
-			}
-			buf[i] = makeMoves(kingSq, to, flag)
-			i++
-		}
+		buf[i] = makeMoves(kingSq, to, flag)
+		i++
 	}
 
 	if !capturesOnly && !p.inCheck() {
@@ -2512,16 +2510,11 @@ func clearHeuristics() {
 
 func (p *Position) orderMoves(moves []Move, bestMove Move, killer1, killer2 Move, prevMove Move) []Move {
 	n := len(moves)
-	if n == 0 {
-		return moves
-	}
 	var stackScores [256]int
 	scores := stackScores[:n]
-
 	var pins [2]Bitboard
 	var ksq [2]int
 	pinsComputed := false
-
 	for i := 0; i < n; i++ {
 		m := moves[i]
 		score := 0
