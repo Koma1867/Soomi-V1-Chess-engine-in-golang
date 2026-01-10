@@ -481,16 +481,17 @@ func initSqBB() {
 }
 
 var (
-	zobristPiece    [2][6][64]uint64
-	zobristSide     uint64
-	zobristCastleWK uint64
-	zobristCastleWQ uint64
-	zobristCastleBK uint64
-	zobristCastleBQ uint64
-	zobristEP       [8]uint64
-	knightAttacks   [64]Bitboard
-	kingAttacks     [64]Bitboard
-	pawnAttacks     [2][64]Bitboard
+	zobristPiece      [2][6][64]uint64
+	zobristSide       uint64
+	zobristCastleWK   uint64
+	zobristCastleWQ   uint64
+	zobristCastleBK   uint64
+	zobristCastleBQ   uint64
+	zobristCastleDiff [16]uint64
+	zobristEP         [8]uint64
+	knightAttacks     [64]Bitboard
+	kingAttacks       [64]Bitboard
+	pawnAttacks       [2][64]Bitboard
 )
 
 func (p *Position) isRepetition() bool {
@@ -925,6 +926,21 @@ func initZobrist() {
 	for i := 0; i < 8; i++ {
 		zobristEP[i] = next()
 	}
+	// Precompute XOR for makemove
+	for i := 0; i < 16; i++ {
+		if i&1 != 0 {
+			zobristCastleDiff[i] ^= zobristCastleWK
+		}
+		if i&2 != 0 {
+			zobristCastleDiff[i] ^= zobristCastleWQ
+		}
+		if i&4 != 0 {
+			zobristCastleDiff[i] ^= zobristCastleBK
+		}
+		if i&8 != 0 {
+			zobristCastleDiff[i] ^= zobristCastleBQ
+		}
+	}
 }
 
 func initAttacks() {
@@ -1193,7 +1209,7 @@ func (p *Position) getPins(side int) Bitboard {
 	pinnersR := (p.pieces[them][Rook] | p.pieces[them][Queen]) & rookAttacks(kingSq, 0)
 	for pinnersR != 0 {
 		sq := popLSB(&pinnersR)
-		between := atkK & rookAttacks(sq, p.all)
+		between := atkK & lineBB[kingSq][sq]
 		if bits.OnesCount64(uint64(between&p.occupied[side])) == 1 {
 			pinned |= between & p.occupied[side]
 		}
@@ -1204,7 +1220,7 @@ func (p *Position) getPins(side int) Bitboard {
 	pinnersB := (p.pieces[them][Bishop] | p.pieces[them][Queen]) & bishopAttacks(kingSq, 0)
 	for pinnersB != 0 {
 		sq := popLSB(&pinnersB)
-		between := atkKB & bishopAttacks(sq, p.all)
+		between := atkKB & lineBB[kingSq][sq]
 		if bits.OnesCount64(uint64(between&p.occupied[side])) == 1 {
 			pinned |= between & p.occupied[side]
 		}
@@ -1659,19 +1675,7 @@ func (p *Position) makeMove(m Move) Undo {
 
 	p.castle &= castleMask[from] & castleMask[to]
 
-	changedCastle := undo.castle ^ p.castle
-	if changedCastle&1 != 0 {
-		h ^= zobristCastleWK
-	}
-	if changedCastle&2 != 0 {
-		h ^= zobristCastleWQ
-	}
-	if changedCastle&4 != 0 {
-		h ^= zobristCastleBK
-	}
-	if changedCastle&8 != 0 {
-		h ^= zobristCastleBQ
-	}
+	h ^= zobristCastleDiff[undo.castle^p.castle]
 	p.side ^= 1
 	irreversible := (undo.captured >= 0) || (movingPiece == Pawn)
 	p.historyPly++
@@ -1862,8 +1866,12 @@ func (p *Position) see(m Move, pins [2]Bitboard, kingSq [2]int) int {
 func (p *Position) seeIterative(from, to, pieceAfterFirst, gain0 int, pins [2]Bitboard, kingSq [2]int) int {
 	var gain [32]int
 	d := 0
+	// Pre-calculate slider masks
+	diagSliders := p.pieces[White][Bishop] | p.pieces[Black][Bishop] | p.pieces[White][Queen] | p.pieces[Black][Queen]
+	orthSliders := p.pieces[White][Rook] | p.pieces[Black][Rook] | p.pieces[White][Queen] | p.pieces[Black][Queen]
+
 	occ := p.all
-	att := p.getSEEAttackers(to, occ)
+	att := p.getSEEAttackers(to, occ, diagSliders, orthSliders)
 
 	// First move (the move m passed to see)
 	us := p.side
@@ -1873,7 +1881,7 @@ func (p *Position) seeIterative(from, to, pieceAfterFirst, gain0 int, pins [2]Bi
 	att &^= sqBB[from]
 	occ &^= sqBB[from]
 	// Any move can uncover X-ray sliders
-	att |= p.getXrayAttackers(to, occ)
+	att |= p.getXrayAttackers(to, occ, diagSliders, orthSliders)
 	us ^= 1
 	for {
 		d++
@@ -1912,7 +1920,7 @@ func (p *Position) seeIterative(from, to, pieceAfterFirst, gain0 int, pins [2]Bi
 		piece = pt
 		att &^= sqBB[attSq]
 		occ &^= sqBB[attSq]
-		att |= p.getXrayAttackers(to, occ)
+		att |= p.getXrayAttackers(to, occ, diagSliders, orthSliders)
 		us ^= 1
 	}
 
@@ -1922,19 +1930,17 @@ func (p *Position) seeIterative(from, to, pieceAfterFirst, gain0 int, pins [2]Bi
 	return gain[0]
 }
 
-func (p *Position) getSEEAttackers(sq int, occ Bitboard) Bitboard {
+func (p *Position) getSEEAttackers(sq int, occ, diagSliders, orthSliders Bitboard) Bitboard {
 	return (pawnAttacks[White][sq] & p.pieces[Black][Pawn] & occ) |
 		(pawnAttacks[Black][sq] & p.pieces[White][Pawn] & occ) |
 		(knightAttacks[sq] & (p.pieces[White][Knight] | p.pieces[Black][Knight]) & occ) |
 		(kingAttacks[sq] & (p.pieces[White][King] | p.pieces[Black][King]) & occ) |
-		(bishopAttacks(sq, occ) & (p.pieces[White][Bishop] | p.pieces[Black][Bishop] | p.pieces[White][Queen] | p.pieces[Black][Queen]) & occ) |
-		(rookAttacks(sq, occ) & (p.pieces[White][Rook] | p.pieces[Black][Rook] | p.pieces[White][Queen] | p.pieces[Black][Queen]) & occ)
+		(bishopAttacks(sq, occ) & diagSliders & occ) |
+		(rookAttacks(sq, occ) & orthSliders & occ)
 }
 
-func (p *Position) getXrayAttackers(sq int, occ Bitboard) Bitboard {
-	bishops := (p.pieces[White][Bishop] | p.pieces[Black][Bishop] | p.pieces[White][Queen] | p.pieces[Black][Queen]) & occ
-	rooks := (p.pieces[White][Rook] | p.pieces[Black][Rook] | p.pieces[White][Queen] | p.pieces[Black][Queen]) & occ
-	return (bishopAttacks(sq, occ) & bishops) | (rookAttacks(sq, occ) & rooks)
+func (p *Position) getXrayAttackers(sq int, occ, diagSliders, orthSliders Bitboard) Bitboard {
+	return (bishopAttacks(sq, occ) & diagSliders & occ) | (rookAttacks(sq, occ) & orthSliders & occ)
 }
 
 func updateHistory(side, from, to, bonus int) {
@@ -2176,28 +2182,17 @@ func (p *Position) evalPawnStorm() int {
 	whiteKingSq := p.kingSq[White]
 	blackKingSq := p.kingSq[Black]
 
-	kf := whiteKingSq % 8
-	for bb := p.pieces[Black][Pawn]; bb != 0; {
+	for bb := p.pieces[Black][Pawn] & passedPawnMask[White][whiteKingSq]; bb != 0; {
 		sq := popLSB(&bb)
-		if abs(sq%8-kf) <= 1 {
-			dist := (sq / 8) - (whiteKingSq / 8)
-			if dist > 0 {
-				score -= penaltyPawnStorm * (6 - dist)
-			}
-		}
+		dist := (sq / 8) - (whiteKingSq / 8)
+		score -= penaltyPawnStorm * (6 - dist)
 	}
 
-	kf = blackKingSq % 8
-	for bb := p.pieces[White][Pawn]; bb != 0; {
+	for bb := p.pieces[White][Pawn] & passedPawnMask[Black][blackKingSq]; bb != 0; {
 		sq := popLSB(&bb)
-		if abs(sq%8-kf) <= 1 {
-			dist := (blackKingSq / 8) - (sq / 8)
-			if dist > 0 {
-				score += penaltyPawnStorm * (6 - dist)
-			}
-		}
+		dist := (blackKingSq / 8) - (sq / 8)
+		score += penaltyPawnStorm * (6 - dist)
 	}
-
 	return score
 }
 
@@ -2387,13 +2382,11 @@ func (p *Position) evaluate() int {
 	mgScore += trapped
 
 	// Tempo
-	tempoMG := 0
 	if p.side == White {
-		tempoMG = 20
+		mgScore += 20
 	} else {
-		tempoMG = -20
+		mgScore -= 20
 	}
-	mgScore += tempoMG
 	ph := p.phase
 	if ph < 0 {
 		ph = 0
