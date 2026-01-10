@@ -513,10 +513,7 @@ func (p *Position) isInsufficientMaterial() bool {
 		return false
 	}
 	// Since Kings are always present, a side has <= 1 minor piece if occupied count <= 2.
-	if bits.OnesCount64(uint64(p.occupied[White])) <= 2 && bits.OnesCount64(uint64(p.occupied[Black])) <= 2 {
-		return true
-	}
-	return false
+	return bits.OnesCount64(uint64(p.occupied[White])) <= 2 && bits.OnesCount64(uint64(p.occupied[Black])) <= 2
 }
 
 type ttEntry struct {
@@ -1251,20 +1248,12 @@ func bishopAttacks(sq int, occ Bitboard) Bitboard {
 }
 
 func (p *Position) isAttacked(sq, bySide int, occ Bitboard) bool {
-	if pawnAttacks[bySide^1][sq]&p.pieces[bySide][Pawn] != 0 {
-		return true
-	}
-	if knightAttacks[sq]&p.pieces[bySide][Knight] != 0 {
-		return true
-	}
-	if kingAttacks[sq]&p.pieces[bySide][King] != 0 {
-		return true
-	}
 	qu := p.pieces[bySide][Queen]
-	if bishopAttacks(sq, occ)&(p.pieces[bySide][Bishop]|qu) != 0 {
-		return true
-	}
-	return rookAttacks(sq, occ)&(p.pieces[bySide][Rook]|qu) != 0
+	return (pawnAttacks[bySide^1][sq]&p.pieces[bySide][Pawn] != 0) ||
+		(knightAttacks[sq]&p.pieces[bySide][Knight] != 0) ||
+		(kingAttacks[sq]&p.pieces[bySide][King] != 0) ||
+		(bishopAttacks(sq, occ)&(p.pieces[bySide][Bishop]|qu) != 0) ||
+		(rookAttacks(sq, occ)&(p.pieces[bySide][Rook]|qu) != 0)
 }
 
 func (p *Position) inCheck() bool {
@@ -3186,11 +3175,7 @@ func (tc *TimeControl) allocateTime(side int) {
 }
 
 func (tc *TimeControl) shouldStop() bool {
-	if atomic.LoadInt32(&tc.stopped) != 0 {
-		return true
-	}
-	d := tc.deadline
-	return !d.IsZero() && time.Until(d) <= 0
+	return atomic.LoadInt32(&tc.stopped) != 0 || (!tc.deadline.IsZero() && time.Until(tc.deadline) <= 0)
 }
 
 func (tc *TimeControl) shouldContinue(lastIter time.Duration) bool {
