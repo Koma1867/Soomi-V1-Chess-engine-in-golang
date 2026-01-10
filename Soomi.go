@@ -2865,11 +2865,8 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 		}
 
 		// Late Move Pruning, prune like a muthafucka
-		if depth <= 3 && !pvNode && !inCheck {
-			threshold := 4 + depth*depth
-			if legalMoves > threshold {
-				continue
-			}
+		if depth <= 3 && !pvNode && !inCheck && legalMoves > 4+depth*depth {
+			continue
 		}
 
 		undo := p.makeMove(m)
