@@ -132,7 +132,6 @@ var (
 	castleMask         [64]int
 	pawnShieldMask     [2][64]Bitboard
 	fileMasks          [8]Bitboard
-	rankMasks          [8]Bitboard
 	passedPawnMask     [2][64]Bitboard
 )
 
@@ -720,7 +719,6 @@ func initLMR() {
 func initEvaluation() {
 	for i := 0; i < 8; i++ {
 		fileMasks[i] = 0x0101010101010101 << i
-		rankMasks[i] = 0xFF << (i * 8)
 	}
 	for sq := 0; sq < 64; sq++ {
 		mask := kingAttacks[sq] | sqBB[sq]
