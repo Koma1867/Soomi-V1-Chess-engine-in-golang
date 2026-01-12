@@ -508,11 +508,7 @@ func (p *Position) isDraw() bool {
 }
 
 func (p *Position) isInsufficientMaterial() bool {
-	if (p.pieces[White][Pawn] | p.pieces[Black][Pawn] | p.pieces[White][Rook] | p.pieces[Black][Rook] | p.pieces[White][Queen] | p.pieces[Black][Queen]) != 0 {
-		return false
-	}
-	// Since Kings are always present, a side has <= 1 minor piece if occupied count <= 2.
-	return bits.OnesCount64(uint64(p.occupied[White])) <= 2 && bits.OnesCount64(uint64(p.occupied[Black])) <= 2
+	return (p.pieces[White][Pawn]|p.pieces[Black][Pawn]|p.pieces[White][Rook]|p.pieces[Black][Rook]|p.pieces[White][Queen]|p.pieces[Black][Queen]) == 0 && bits.OnesCount64(uint64(p.occupied[White])) <= 2 && bits.OnesCount64(uint64(p.occupied[Black])) <= 2
 }
 
 type ttEntry struct {
@@ -3522,18 +3518,7 @@ func uciLoop() {
 			if pos.side == Black {
 				expectedHash ^= zobristSide
 			}
-			if pos.castle&1 != 0 {
-				expectedHash ^= zobristCastleWK
-			}
-			if pos.castle&2 != 0 {
-				expectedHash ^= zobristCastleWQ
-			}
-			if pos.castle&4 != 0 {
-				expectedHash ^= zobristCastleBK
-			}
-			if pos.castle&8 != 0 {
-				expectedHash ^= zobristCastleBQ
-			}
+			expectedHash ^= zobristCastleDiff[pos.castle]
 			if pos.epSquare != -1 {
 				expectedHash ^= zobristEP[pos.epSquare%8]
 			}
