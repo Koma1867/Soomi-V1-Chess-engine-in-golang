@@ -2369,11 +2369,10 @@ func (p *Position) evaluate() int {
 	mgScore += trapped
 
 	// Tempo
-	if p.side == White {
-		mgScore += 20
-	} else {
-		mgScore -= 20
-	}
+	// Calculation uses p.side which is 0 for white and 1 for black
+	// Therefore for white 20 - 40 * p.side = 20 (as it should, p.side is 0)
+	// And for black the calculation 20 - 40 * p.side gives = -20 (p.side is 1)
+	mgScore += 20 - 40*p.side
 	ph := p.phase
 	if ph < 0 {
 		ph = 0
@@ -2403,20 +2402,8 @@ func (p *Position) evaluate() int {
 */
 
 func clearHeuristics() {
-	for i := range history {
-		for j := range history[i] {
-			for k := range history[i][j] {
-				history[i][j][k] = 0
-			}
-		}
-	}
-	for i := range countermoves {
-		for j := range countermoves[i] {
-			for k := range countermoves[i][j] {
-				countermoves[i][j][k] = 0
-			}
-		}
-	}
+	history = [2][64][64]int{}
+	countermoves = [2][64][64]Move{}
 }
 
 func (p *Position) orderMoves(moves []Move, bestMove Move, killer1, killer2 Move, prevMove Move) []Move {
