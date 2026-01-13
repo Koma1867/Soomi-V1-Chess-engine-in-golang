@@ -1416,11 +1416,9 @@ func (p *Position) isLegal(m Move) bool {
 	}
 
 	occ2 := (p.all &^ fromBB &^ capBB) | toBB
-	var kingSq int
+	kingSq := p.kingSq[us]
 	if pt == King {
 		kingSq = to
-	} else {
-		kingSq = p.kingSq[us]
 	}
 	return !(pawnAttacks[them^1][kingSq]&(p.pieces[them][Pawn]&^capBB) != 0 || knightAttacks[kingSq]&(p.pieces[them][Knight]&^capBB) != 0 || bishopAttacks(kingSq, occ2)&((p.pieces[them][Bishop]|p.pieces[them][Queen])&^capBB) != 0 || rookAttacks(kingSq, occ2)&((p.pieces[them][Rook]|p.pieces[them][Queen])&^capBB) != 0 || kingAttacks[kingSq]&p.pieces[them][King] != 0)
 }
@@ -1449,11 +1447,7 @@ func (p *Position) makeMove(m Move) Undo {
 	if flags&FlagCapture != 0 {
 		capSq := to
 		if flags == FlagEP {
-			if us == White {
-				capSq = to - 8
-			} else {
-				capSq = to + 8
-			}
+			capSq ^= 8
 		}
 		capturedPiece := p.square[capSq] & 7
 		undo.captured = capturedPiece
@@ -1674,11 +1668,7 @@ func (p *Position) unmakeMove(m Move, undo Undo) {
 	if undo.captured >= 0 {
 		capSq := to
 		if flags == FlagEP {
-			if us == White {
-				capSq = to - 8
-			} else {
-				capSq = to + 8
-			}
+			capSq ^= 8
 		}
 		bb := sqBB[capSq]
 		capturedPiece := undo.captured
@@ -2285,11 +2275,8 @@ func (p *Position) evaluate() int {
 	}
 	phaseScaled := ((totalPhase-ph)*PhaseScale + totalPhase/2) / totalPhase
 	score := egScore + ((mgScore-egScore)*phaseScaled)/PhaseScale
-
-	if p.side == Black {
-		return -score
-	}
-	return score
+	// Same trick as tempo
+	return score * (1 - 2*p.side)
 }
 
 /*
