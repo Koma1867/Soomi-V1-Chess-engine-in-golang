@@ -1399,18 +1399,11 @@ func (p *Position) isLegal(m Move) bool {
 	us, them := p.side, p.side^1
 	flags := m.flags()
 	if flags == FlagCastle {
-		if to > from {
-			// King side castle: check squares from+1 and from+2 (e.g., 5 & 6 or 61 & 62)
-			if p.isAttacked(from+1, them, p.all) || p.isAttacked(from+2, them, p.all) {
-				return false
-			}
-		} else {
-			// Queen side castle: check squares from-1 and from-2 (e.g., 3 & 2 or 59 & 58)
-			if p.isAttacked(from-1, them, p.all) || p.isAttacked(from-2, them, p.all) {
-				return false
-			}
+		d := 1
+		if to < from {
+			d = -1
 		}
-		return true
+		return !p.isAttacked(from+d, them, p.all) && !p.isAttacked(from+2*d, them, p.all)
 	}
 	pt := p.square[from] & 7
 	fromBB, toBB := sqBB[from], sqBB[to]
@@ -1419,11 +1412,7 @@ func (p *Position) isLegal(m Move) bool {
 	if m.isCapture() {
 		capSq := to
 		if flags == FlagEP {
-			if us == White {
-				capSq = to - 8
-			} else {
-				capSq = to + 8
-			}
+			capSq ^= 8
 		}
 		capBB = sqBB[capSq]
 	}
@@ -1435,23 +1424,7 @@ func (p *Position) isLegal(m Move) bool {
 	} else {
 		kingSq = p.kingSq[us]
 	}
-
-	if pawnAttacks[them^1][kingSq]&(p.pieces[them][Pawn]&^capBB) != 0 {
-		return false
-	}
-	if knightAttacks[kingSq]&(p.pieces[them][Knight]&^capBB) != 0 {
-		return false
-	}
-	if bishopAttacks(kingSq, occ2)&((p.pieces[them][Bishop]|p.pieces[them][Queen])&^capBB) != 0 {
-		return false
-	}
-	if rookAttacks(kingSq, occ2)&((p.pieces[them][Rook]|p.pieces[them][Queen])&^capBB) != 0 {
-		return false
-	}
-	if kingAttacks[kingSq]&p.pieces[them][King] != 0 {
-		return false
-	}
-	return true
+	return !(pawnAttacks[them^1][kingSq]&(p.pieces[them][Pawn]&^capBB) != 0 || knightAttacks[kingSq]&(p.pieces[them][Knight]&^capBB) != 0 || bishopAttacks(kingSq, occ2)&((p.pieces[them][Bishop]|p.pieces[them][Queen])&^capBB) != 0 || rookAttacks(kingSq, occ2)&((p.pieces[them][Rook]|p.pieces[them][Queen])&^capBB) != 0 || kingAttacks[kingSq]&p.pieces[them][King] != 0)
 }
 
 func (p *Position) makeMove(m Move) Undo {
