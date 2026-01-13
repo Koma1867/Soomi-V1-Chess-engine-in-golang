@@ -310,12 +310,10 @@ type SearchStack struct {
 */
 
 func (p *Position) computePhase() int {
-	rem := 0
+	p.phase = totalPhase
 	for pt := Knight; pt <= Queen; pt++ {
-		bb := p.pieces[White][pt] | p.pieces[Black][pt]
-		rem += bits.OnesCount64(uint64(bb)) * piecePhase[pt]
+		p.phase -= bits.OnesCount64(uint64(p.pieces[White][pt]|p.pieces[Black][pt])) * piecePhase[pt]
 	}
-	p.phase = totalPhase - rem
 	return p.phase
 }
 
