@@ -560,19 +560,14 @@ func InitTT(sizeMB int) {
 	if sizeMB <= 0 {
 		sizeMB = defaultTTSizeMB
 	}
-
 	entrySize := uint64(16)
 	totalBytes := uint64(sizeMB) * 1024 * 1024
 	entries := totalBytes / entrySize
-	size := uint64(1)
-	for size<<1 <= entries {
-		size <<= 1
-	}
+	size := uint64(1) << (bits.Len64(entries) - 1)
 	maxLen := uint64(^uint(0) >> 1)
 	if size > maxLen {
 		size = maxLen
 	}
-
 	tt = &TranspositionTable{
 		entries: make([]ttEntry, int(size)),
 		mask:    size - 1,
@@ -1024,63 +1019,7 @@ func NewPosition() *Position {
 }
 
 func (p *Position) setStartPos() {
-	*p = Position{}
-	for i := range p.square {
-		p.square[i] = -1
-	}
-
-	p.side = White
-	p.castle = 0xF
-	p.epSquare = -1
-
-	setPiece := func(sq, c, pc int) {
-		bb := sqBB[sq]
-		p.square[sq] = (c << 3) | pc
-		p.pieces[c][pc] |= bb
-		p.occupied[c] |= bb
-		p.all |= bb
-		p.material[c] += pieceValues[pc]
-		p.psqScore[c] += pst[c][pc][sq]
-		p.psqScoreEG[c] += pstEnd[c][pc][sq]
-		p.hash ^= zobristPiece[c][pc][sq]
-	}
-
-	for f := 0; f < 8; f++ {
-		setPiece(8+f, White, Pawn)
-	}
-	setPiece(0, White, Rook)
-	setPiece(7, White, Rook)
-	setPiece(1, White, Knight)
-	setPiece(6, White, Knight)
-	setPiece(2, White, Bishop)
-	setPiece(5, White, Bishop)
-	setPiece(3, White, Queen)
-	setPiece(4, White, King)
-
-	for f := 0; f < 8; f++ {
-		setPiece(48+f, Black, Pawn)
-	}
-	setPiece(56, Black, Rook)
-	setPiece(63, Black, Rook)
-	setPiece(57, Black, Knight)
-	setPiece(62, Black, Knight)
-	setPiece(58, Black, Bishop)
-	setPiece(61, Black, Bishop)
-	setPiece(59, Black, Queen)
-	setPiece(60, Black, King)
-	p.hash ^= zobristCastleWK
-	p.hash ^= zobristCastleWQ
-	p.hash ^= zobristCastleBK
-	p.hash ^= zobristCastleBQ
-	p.pawnHash = 0
-	for f := 0; f < 8; f++ {
-		p.pawnHash ^= zobristPiece[White][Pawn][8+f]
-		p.pawnHash ^= zobristPiece[Black][Pawn][48+f]
-	}
-	p.historyKeys[0] = p.hash
-	p.kingSq[White] = 4
-	p.kingSq[Black] = 60
-	p.computePhase()
+	p.setFEN("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1")
 }
 
 func (p *Position) setFEN(fen string) {
