@@ -3011,45 +3011,22 @@ func (tc *TimeControl) Stop() {
 */
 
 func (tc *TimeControl) allocateTime(side int) {
-	if tc.movetime > 0 {
-		tc.deadline = time.Now().Add(time.Duration(tc.movetime) * time.Millisecond)
-		return
-	}
 	if tc.infinite || tc.depth > 0 {
-		tc.deadline = time.Time{}
 		return
 	}
-
-	var myTime, myInc int64
-	if side == White {
-		myTime, myInc = tc.wtime, tc.winc
-	} else {
-		myTime, myInc = tc.btime, tc.binc
+	ms := tc.movetime
+	if ms <= 0 {
+		t, i, mtg := tc.wtime, tc.winc, int64(tc.movestogo)
+		if side == Black {
+			t, i = tc.btime, tc.binc
+		}
+		if mtg <= 0 {
+			mtg = DefaultMovesToGo
+		}
+		u := max(t-minTimeMs, 0)
+		ms = max(min(min(u/mtg, u/perMoveCapDiv)+i, u), min(minTimeMs, u))
 	}
-
-	movesToGo := tc.movestogo
-	if movesToGo <= 0 {
-		movesToGo = DefaultMovesToGo
-	}
-
-	usableTime := max(myTime-minTimeMs, 0)
-
-	fromBank := usableTime / int64(movesToGo)
-	capBank := usableTime / perMoveCapDiv
-	if fromBank > capBank {
-		fromBank = capBank
-	}
-
-	baseMs := min(fromBank+myInc, usableTime)
-	if myTime < 1000 {
-		baseMs = min(baseMs, myTime-100)
-	}
-
-	if baseMs < minTimeMs && usableTime > 0 {
-		baseMs = min(minTimeMs, usableTime)
-	}
-
-	tc.deadline = time.Now().Add(time.Millisecond * time.Duration(baseMs))
+	tc.deadline = time.Now().Add(time.Duration(ms) * time.Millisecond)
 }
 
 func (tc *TimeControl) shouldStop() bool {
