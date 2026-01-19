@@ -555,21 +555,13 @@ type TranspositionTable struct {
 }
 
 func InitTT(sizeMB int) {
-	if sizeMB <= 0 {
-		sizeMB = defaultTTSizeMB
-	}
 	entrySize := uint64(16)
 	totalBytes := uint64(sizeMB) * 1024 * 1024
 	entries := totalBytes / entrySize
 	size := uint64(1) << (bits.Len64(entries) - 1)
-	maxLen := uint64(^uint(0) >> 1)
-	if size > maxLen {
-		size = maxLen
-	}
 	tt = &TranspositionTable{
 		entries: make([]ttEntry, int(size)),
 		mask:    size - 1,
-		gen:     1,
 	}
 }
 
@@ -832,17 +824,6 @@ func initPST() {
 		-5, 0, 0, 0, 0, 0, 0, -5,
 		15, 20, 20, 25, 25, 20, 20, 15,
 		10, 10, 10, 10, 10, 10, 10, 10,
-	}
-
-	pstEnd[White][Queen] = [64]int{
-		0, 0, 0, 0, 0, 0, 0, 0,
-		0, 0, 0, 0, 0, 0, 0, 0,
-		0, 0, 0, 0, 0, 0, 0, 0,
-		0, 0, 0, 0, 0, 0, 0, 0,
-		0, 0, 0, 0, 0, 0, 0, 0,
-		0, 0, 0, 0, 0, 0, 0, 0,
-		0, 0, 0, 0, 0, 0, 0, 0,
-		0, 0, 0, 0, 0, 0, 0, 0,
 	}
 
 	pstEnd[White][King] = [64]int{
@@ -3043,10 +3024,6 @@ func (tc *TimeControl) shouldContinue(lastIter time.Duration) bool {
 	}
 
 	remain := time.Until(tc.deadline)
-	if remain <= 0 {
-		return false
-	}
-
 	minRequired := lastIter*nextIterMult + continueMargin
 	return remain > minRequired
 }
@@ -3510,7 +3487,6 @@ Example Usage:
 func main() {
 	fmt.Fprintln(os.Stderr, "Soomi V1.2.0 - UCI Chess Engine")
 	fmt.Fprintln(os.Stderr, "Type 'help' for available commands or 'uci' to enter UCI mode")
-	fmt.Fprintln(os.Stderr)
 	uciLoop()
 }
 
