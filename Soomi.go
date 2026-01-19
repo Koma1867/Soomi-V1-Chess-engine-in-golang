@@ -146,8 +146,6 @@ const (
 	bonusKnightOutpost    = 20
 	penaltyKingTropism    = 2
 	bonusRookOn7th        = 20
-	penaltyTrappedBishop  = 50
-	penaltyTrappedRook    = 40
 )
 
 /*
@@ -2159,50 +2157,6 @@ func (p *Position) evalRooksOnFiles() int {
 	return score
 }
 
-// Hard coded Traps, i have no idea if good or not
-func (p *Position) evalTrappedPieces() int {
-	score := 0
-	// White Trapped Bishop
-	// Bishop on c1, pawn on d2
-	if (p.pieces[White][Bishop]&sqBB[2]) != 0 && (p.pieces[White][Pawn]&sqBB[11]) != 0 {
-		score -= penaltyTrappedBishop
-	}
-	// Bishop on f1, pawn on e2
-	if (p.pieces[White][Bishop]&sqBB[5]) != 0 && (p.pieces[White][Pawn]&sqBB[12]) != 0 {
-		score -= penaltyTrappedBishop
-	}
-	// Black Trapped Bishop
-	// Bishop on c8, pawn on d7
-	if (p.pieces[Black][Bishop]&sqBB[58]) != 0 && (p.pieces[Black][Pawn]&sqBB[51]) != 0 {
-		score += penaltyTrappedBishop
-	}
-	// Bishop on f8, pawn on e7
-	if (p.pieces[Black][Bishop]&sqBB[61]) != 0 && (p.pieces[Black][Pawn]&sqBB[52]) != 0 {
-		score += penaltyTrappedBishop
-	}
-
-	// White Trapped Rook
-	// Rook on a1, king on b1
-	if (p.pieces[White][Rook]&sqBB[0]) != 0 && (p.pieces[White][King]&sqBB[1]) != 0 {
-		score -= penaltyTrappedRook
-	}
-	// Rook on h1, king on g1
-	if (p.pieces[White][Rook]&sqBB[7]) != 0 && (p.pieces[White][King]&sqBB[6]) != 0 {
-		score -= penaltyTrappedRook
-	}
-	// Black Trapped Rook
-	// Rook on a8, king on b8
-	if (p.pieces[Black][Rook]&sqBB[56]) != 0 && (p.pieces[Black][King]&sqBB[57]) != 0 {
-		score += penaltyTrappedRook
-	}
-	// Rook on h8, king on g8
-	if (p.pieces[Black][Rook]&sqBB[63]) != 0 && (p.pieces[Black][King]&sqBB[62]) != 0 {
-		score += penaltyTrappedRook
-	}
-
-	return score
-}
-
 func (p *Position) evaluate() int {
 	a := p.material[White] - p.material[Black]
 	b := p.psqScore[White] - p.psqScore[Black]
@@ -2241,19 +2195,12 @@ func (p *Position) evaluate() int {
 	mgScore += rof
 	egScore += rof
 
-	// Add Trapped Pieces
-	trapped := p.evalTrappedPieces()
-	mgScore += trapped
-
 	// Tempo
 	// Calculation uses p.side which is 0 for white and 1 for black
 	// Therefore for white 20 - 40 * p.side = 20 (as it should, p.side is 0)
 	// And for black the calculation 20 - 40 * p.side gives = -20 (p.side is 1)
 	mgScore += 20 - 40*p.side
 	ph := p.phase
-	if ph < 0 {
-		ph = 0
-	}
 	phaseScaled := ((totalPhase-ph)*PhaseScale + totalPhase/2) / totalPhase
 	score := egScore + ((mgScore-egScore)*phaseScaled)/PhaseScale
 	// Same trick as tempo
