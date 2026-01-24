@@ -1106,35 +1106,6 @@ func initLineBB() {
 	}
 }
 
-func (p *Position) getPins(side int) Bitboard {
-	kingSq := p.kingSq[side]
-	them := side ^ 1
-	pinned := Bitboard(0)
-
-	// Orthogonal pinners
-	atkK := rookAttacks(kingSq, p.all)
-	pinnersR := (p.pieces[them][Rook] | p.pieces[them][Queen]) & rookAttacks(kingSq, 0)
-	for pinnersR != 0 {
-		sq := popLSB(&pinnersR)
-		between := atkK & lineBB[kingSq][sq]
-		if bits.OnesCount64(uint64(between&p.occupied[side])) == 1 {
-			pinned |= between & p.occupied[side]
-		}
-	}
-
-	// Diagonal pinners
-	atkKB := bishopAttacks(kingSq, p.all)
-	pinnersB := (p.pieces[them][Bishop] | p.pieces[them][Queen]) & bishopAttacks(kingSq, 0)
-	for pinnersB != 0 {
-		sq := popLSB(&pinnersB)
-		between := atkKB & lineBB[kingSq][sq]
-		if bits.OnesCount64(uint64(between&p.occupied[side])) == 1 {
-			pinned |= between & p.occupied[side]
-		}
-	}
-	return pinned
-}
-
 func (p *Position) pieceAt(sq int) (color, piece int, ok bool) {
 	val := p.square[sq]
 	if val < 0 {
@@ -1708,7 +1679,7 @@ func (p *Position) evalBishopPair() int {
 	return score
 }
 
-func (p *Position) see(m Move, pins [2]Bitboard, kingSq [2]int) int {
+func (p *Position) see(m Move) int {
 	from, to := m.from(), m.to()
 	piece := p.square[from] & 7
 	flags := m.flags()
@@ -1722,10 +1693,10 @@ func (p *Position) see(m Move, pins [2]Bitboard, kingSq [2]int) int {
 	if m.isPromo() {
 		pieceAfter = m.promoType()
 	}
-	return p.seeIterative(from, to, pieceAfter, gain0, pins, kingSq)
+	return p.seeIterative(from, to, pieceAfter, gain0)
 }
 
-func (p *Position) seeIterative(from, to, pieceAfterFirst, gain0 int, pins [2]Bitboard, kingSq [2]int) int {
+func (p *Position) seeIterative(from, to, pieceAfterFirst, gain0 int) int {
 	var gain [32]int
 	d := 0
 	// Pre-calculate slider masks
@@ -1757,12 +1728,6 @@ func (p *Position) seeIterative(from, to, pieceAfterFirst, gain0 int, pins [2]Bi
 			if subset != 0 {
 				for subset != 0 {
 					s := popLSB(&subset)
-					// If the attacker is pinned, it can only capture if the target 'to' is on the pin ray
-					if (sqBB[s] & pins[us]) != 0 {
-						if (lineBB[kingSq[us]][s] & sqBB[to]) == 0 {
-							continue
-						}
-					}
 					pt = pType
 					attSq = s
 					found = true
@@ -2231,9 +2196,6 @@ func (p *Position) orderMoves(moves []Move, bestMove Move, killer1, killer2 Move
 	n := len(moves)
 	var stackScores [256]int
 	scores := stackScores[:n]
-	var pins [2]Bitboard
-	var ksq [2]int
-	pinsComputed := false
 	for i := 0; i < n; i++ {
 		m := moves[i]
 		score := 0
@@ -2242,12 +2204,7 @@ func (p *Position) orderMoves(moves []Move, bestMove Move, killer1, killer2 Move
 		} else if m.isPromo() {
 			score = scorePromoBase + pieceValues[m.promoType()]
 		} else if m.isCapture() {
-			if !pinsComputed {
-				pins = [2]Bitboard{p.getPins(White), p.getPins(Black)}
-				ksq = p.kingSq
-				pinsComputed = true
-			}
-			seeVal := p.see(m, pins, ksq)
+			seeVal := p.see(m)
 			if seeVal >= 0 {
 				victim := Pawn
 				if vt := p.square[m.to()]; vt != -1 {
@@ -2296,7 +2253,7 @@ func (p *Position) orderMoves(moves []Move, bestMove Move, killer1, killer2 Move
 	return moves
 }
 
-func (p *Position) orderMovesQ(moves []Move, scores []int, pins [2]Bitboard, ksq [2]int) {
+func (p *Position) orderMovesQ(moves []Move, scores []int) {
 	n := len(moves)
 	for i := 0; i < n; i++ {
 		m := moves[i]
@@ -2304,7 +2261,7 @@ func (p *Position) orderMovesQ(moves []Move, scores []int, pins [2]Bitboard, ksq
 		if m.isPromo() {
 			score = scorePromoBase + pieceValues[m.promoType()]
 		} else if m.isCapture() {
-			seeVal := p.see(m, pins, ksq)
+			seeVal := p.see(m)
 			if seeVal >= 0 {
 				victim := Pawn
 				if vt := p.square[m.to()]; vt != -1 {
@@ -2393,13 +2350,9 @@ func (p *Position) quiesce(alpha, beta, ply int, tc *TimeControl) int {
 	var movesArr [256]Move
 	n := p.generateMovesTo(movesArr[:], !inCheck)
 	moves := movesArr[:n]
-
-	pins := [2]Bitboard{p.getPins(White), p.getPins(Black)}
-	ksq := p.kingSq
-
 	var stackScores [256]int
 	scores := stackScores[:n]
-	p.orderMovesQ(moves, scores, pins, ksq)
+	p.orderMovesQ(moves, scores)
 
 	legalCount := 0
 	for i, m := range moves {
@@ -2407,7 +2360,7 @@ func (p *Position) quiesce(alpha, beta, ply int, tc *TimeControl) int {
 			return alpha
 		}
 		// Prune bad caps, not in check so we dont prune check responses
-		if !inCheck && m.isCapture() && scores[i] < 0 {
+		if !inCheck && scores[i] < 0 {
 			continue
 		}
 		if !p.isLegal(m) {
@@ -2658,12 +2611,6 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 			quietsTried[quietCount] = m
 			quietCount++
 		}
-
-		// Late Move Pruning, prune like a muthafucka
-		if depth <= 3 && !pvNode && !inCheck && legalMoves > 4+depth*depth {
-			continue
-		}
-
 		undo := p.makeMove(m)
 		childPV := childPVBuf[:0]
 		if pvNode {
