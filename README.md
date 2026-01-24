@@ -12,7 +12,7 @@
 
 ## Features
 - Bitboard move generation using Magic Bitboards
-- Evaluation based on material, PST, mobility, king safety, pawn structure, tempo, king tropism.
+- Evaluation based on material, PST, mobility, king safety, pawn structure, tempo, king tropism, outposts, pawn storms.
 - Tapered evaluation
 - Negamax search with Alpha-Beta pruning
 - Principal Variation Search (PVS)
@@ -21,7 +21,7 @@
 - Check and singular extensions
 - Quiescence Search with Delta Pruning
 - Static Exchange Evaluation (SEE)
-- Pruning techniques including Late Move Reductions (LMR), Null Move Pruning (NMP), Reverse Futility Pruning (RFP), Late Move Pruning (LMP) and Mate Distance Pruning
+- Pruning techniques including Late Move Reductions (LMR), Null Move Pruning (NMP), Reverse Futility Pruning (RFP) and Mate Distance Pruning
 - Move ordering using Hash move, MVV-LVA and SEE (captures), killers, history heuristic and countermove heuristic
 - UCI protocol (compatible with Arena, others not tested)
 - FEN parsing
