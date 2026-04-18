@@ -126,7 +126,6 @@ var (
 	kingAttackerWeight = [6]int{0, 2, 2, 3, 5, 0} // P, N, B, R, Q, K (P and K usually 0 or special)
 	history            [2][64][64]int
 	countermoves       [2][64][64]Move
-	lineBB             [64][64]Bitboard
 	lmrTable           [MaxDepth + 1][256]int
 	lvaOrder           = [6]int{Pawn, Bishop, Knight, Rook, Queen, King}
 	castleMask         [64]int
@@ -478,10 +477,6 @@ func initSqBB() {
 var (
 	zobristPiece      [2][6][64]uint64
 	zobristSide       uint64
-	zobristCastleWK   uint64
-	zobristCastleWQ   uint64
-	zobristCastleBK   uint64
-	zobristCastleBQ   uint64
 	zobristCastleDiff [16]uint64
 	zobristEP         [8]uint64
 	knightAttacks     [64]Bitboard
@@ -619,7 +614,6 @@ func init() {
 	initPassedPawnMask()
 	initAttacks()
 	initMagicBitboards()
-	initLineBB()
 	initEvaluation()
 	initLMR()
 	InitTT(defaultTTSizeMB)
@@ -882,26 +876,24 @@ func initZobrist() {
 		}
 	}
 	zobristSide = next()
-	zobristCastleWK = next()
-	zobristCastleWQ = next()
-	zobristCastleBK = next()
-	zobristCastleBQ = next()
+	wk, wq := next(), next()
+	bk, bq := next(), next()
 	for i := 0; i < 8; i++ {
 		zobristEP[i] = next()
 	}
 	// Precompute XOR for makemove
 	for i := 0; i < 16; i++ {
 		if i&1 != 0 {
-			zobristCastleDiff[i] ^= zobristCastleWK
+			zobristCastleDiff[i] ^= wk
 		}
 		if i&2 != 0 {
-			zobristCastleDiff[i] ^= zobristCastleWQ
+			zobristCastleDiff[i] ^= wq
 		}
 		if i&4 != 0 {
-			zobristCastleDiff[i] ^= zobristCastleBK
+			zobristCastleDiff[i] ^= bk
 		}
 		if i&8 != 0 {
-			zobristCastleDiff[i] ^= zobristCastleBQ
+			zobristCastleDiff[i] ^= bq
 		}
 	}
 }
@@ -1053,18 +1045,15 @@ func (p *Position) setFEN(fen string) {
 			switch ch {
 			case 'K':
 				p.castle |= 1
-				p.hash ^= zobristCastleWK
 			case 'Q':
 				p.castle |= 2
-				p.hash ^= zobristCastleWQ
 			case 'k':
 				p.castle |= 4
-				p.hash ^= zobristCastleBK
 			case 'q':
 				p.castle |= 8
-				p.hash ^= zobristCastleBQ
 			}
 		}
+		p.hash ^= zobristCastleDiff[p.castle]
 	}
 
 	// 4. The french pawn-move
@@ -1086,24 +1075,6 @@ func (p *Position) setFEN(fen string) {
 	p.historyPly = 0
 	p.lastIrreversible = 0
 	p.computePhase()
-}
-
-func initLineBB() {
-	for s1 := 0; s1 < 64; s1++ {
-		for s2 := 0; s2 < 64; s2++ {
-			if s1 == s2 {
-				continue
-			}
-			// Orthogonal
-			if (rookAttacksClassical(s1, 0) & sqBB[s2]) != 0 {
-				lineBB[s1][s2] = (rookAttacksClassical(s1, 0) & rookAttacksClassical(s2, 0)) | sqBB[s1] | sqBB[s2]
-			}
-			// Diagonal
-			if (bishopAttacksClassical(s1, 0) & sqBB[s2]) != 0 {
-				lineBB[s1][s2] = (bishopAttacksClassical(s1, 0) & bishopAttacksClassical(s2, 0)) | sqBB[s1] | sqBB[s2]
-			}
-		}
-	}
 }
 
 func (p *Position) pieceAt(sq int) (color, piece int, ok bool) {
@@ -1726,19 +1697,12 @@ func (p *Position) seeIterative(from, to, pieceAfterFirst, gain0 int) int {
 		for _, pType := range lvaOrder {
 			subset := myAtt & p.pieces[us][pType]
 			if subset != 0 {
-				for subset != 0 {
-					s := popLSB(&subset)
-					pt = pType
-					attSq = s
-					found = true
-					break
-				}
-				if found {
-					break
-				}
+				pt = pType
+				attSq = bits.TrailingZeros64(uint64(subset))
+				found = true
+				break
 			}
 		}
-
 		if !found {
 			break
 		}
@@ -2390,43 +2354,6 @@ func (p *Position) quiesce(alpha, beta, ply int, tc *TimeControl) int {
 	return best
 }
 
-// Run a limited negamax for the singular move
-func (p *Position) negamaxSingular(depth, beta, ply int, tc *TimeControl, ss *[MaxDepth]SearchStack, excluded Move, prevMove Move) int {
-	if depth <= 0 {
-		return p.quiesce(beta-1, beta, ply, tc)
-	}
-
-	bestScore := -Infinity
-	var movesArr [256]Move
-	n := p.generateMovesTo(movesArr[:], false)
-	moves := p.orderMoves(movesArr[:n], 0, ss[ply].killer1, ss[ply].killer2, prevMove)
-
-	for _, m := range moves {
-		if m == excluded {
-			continue
-		}
-		if (p.localNodes & NodeCheckMaskSearch) == 0 {
-			if tc.shouldStop() {
-				return beta
-			}
-		}
-		if !p.isLegal(m) {
-			continue
-		}
-		undo := p.makeMove(m)
-		score := -p.negamax(depth-1, -beta, -beta+1, ply+1, nil, tc, ss, m)
-		p.unmakeMove(m, undo)
-
-		if score >= beta {
-			return score
-		}
-		if score > bestScore {
-			bestScore = score
-		}
-	}
-	return bestScore
-}
-
 /*
   ----------------------------------------------------------------------------------
    NEGAMAX SEARCH WITH ALPHA-BETA PRUNING
@@ -2562,27 +2489,6 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 		}
 	}
 
-	// Singular Extensions
-	singularExtension := 0
-	if depth >= 8 && hashMove != 0 && ply < MaxDepth-1 && pv == nil {
-		if _, ttScore, flag, _, found, _ := tt.Probe(p.hash, depth-3); found {
-			if flag == ttFlagLower || flag == ttFlagExact {
-				scoreTT := int(ttScore)
-				// Re-adjust mate scores
-				if scoreTT > Mate-MateScoreGuard {
-					scoreTT -= ply
-				} else if scoreTT < -Mate+MateScoreGuard {
-					scoreTT += ply
-				}
-				betaSingular := scoreTT - 2*depth
-				res := p.negamaxSingular(depth-4, betaSingular, ply, tc, ss, hashMove, prevMove)
-				if res < betaSingular {
-					singularExtension = 1
-				}
-			}
-		}
-	}
-
 	var movesArr [256]Move
 	n := p.generateMovesTo(movesArr[:], false)
 	moves := p.orderMoves(movesArr[:n], hashMove, ss[ply].killer1, ss[ply].killer2, prevMove)
@@ -2617,16 +2523,12 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 			pvPtr = &childPV
 		}
 		var score int
-		extension := 0
-		if m == hashMove {
-			extension = singularExtension
-		}
 
 		if p.isDraw() {
 			score = 0
 		} else {
 			// Late move reductions & Principal variation search
-			childDepth := depth - 1 + extension
+			childDepth := depth - 1
 			canReduce := childDepth >= LMRMinChildDepth && !inCheck && isQuiet && legalMoves > LMRLateMoveAfter
 			var eff int
 			if canReduce {
@@ -2848,11 +2750,6 @@ func (p *Position) search(tc *TimeControl) Move {
 			fmt.Printf(" %v", m)
 		}
 		fmt.Println()
-
-		// Return result
-		if absScore >= Mate-MateScoreGuard {
-			return bestMove
-		}
 
 		if !tc.shouldContinue(elapsed) {
 			break
