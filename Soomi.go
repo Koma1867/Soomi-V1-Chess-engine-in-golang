@@ -45,7 +45,7 @@ const (
 */
 
 const (
-	MaxDepth                           = 32
+	MaxDepth                           = 50
 	Infinity                           = 30000
 	Mate                               = 29000
 	AspirationBase                     = 50
@@ -90,16 +90,21 @@ const (
 )
 
 const (
-	PhaseScale    = 256
-	MVVLVAWeight  = 100
-	MaxHistory    = 16384
+	PhaseScale   = 256
+	MVVLVAWeight = 100
+	MaxHistory   = 16384
+	// pawnTableSize must be a power of 2 for bitwise AND mask to work.
 	pawnTableSize = 131072 // 4MB table (131072 * 32 bytes)
 )
 
+// pawnEntry caches the evaluation of a specific pawn structure.
+// Since pawns move very rarely compared to pieces, the pawn structure remains
+// identical across dozens of consecutive search nodes.
+// Same idea as tt, why evaluate if we know already?
 type pawnEntry struct {
-	key     uint64 // Hash of only the pawn positions
-	mgScore int
-	egScore int
+	key     uint64 // Zobrist hash of the pawn positions
+	mgScore int    // Middle-game score of this pawn structure
+	egScore int    // End-game score of this pawn structure
 }
 
 var (
@@ -547,14 +552,37 @@ type TranspositionTable struct {
 	gen     uint32
 }
 
+// InitTT initializes the transposition table.
+// Small note: it is recommended to only use power of 2 values
+// As the engine will automatically round it down to the nearest power of 2 anyways.
+// Example: You input setoption hash value 150. It will be rounded to 128.
+// Recommended values: 64, 128, 256, 512, 1024...
 func InitTT(sizeMB int) {
+	// A single ttEntry contains two uint64 variables (key and packed).
+	// Each uint64 is 8 bytes, so one entry takes exactly 16 bytes of RAM.
 	entrySize := uint64(16)
+
+	// Convert the requested size from Megabytes (MB) into exact Bytes.
+	// (1 MB = 1024 KB, 1 KB = 1024 Bytes).
 	totalBytes := uint64(sizeMB) * 1024 * 1024
+
+	// Calculate how much we can fit in that memory
 	entries := totalBytes / entrySize
+
+	// bits.Len64(entries) finds out how many bits it takes to represent in binary
+	// Then by subtracting 1 and bitshifting by 1 we force the number to round down to a power of 2.
+	// For example, if we have 100 entries, it goes down to 64.
 	size := uint64(1) << (bits.Len64(entries) - 1)
+
+	// Allocate table in memory
 	tt = &TranspositionTable{
+		// Create array with power of 2
 		entries: make([]ttEntry, int(size)),
-		mask:    size - 1,
+		// Due to size being calculated with our subtract and bitshift stuff,
+		// Subtracting 1 from it gives us a binary mask that we can use
+		// later with a AND instead of a modulo
+		// as modulo is much slower than AND
+		mask: size - 1,
 	}
 }
 
@@ -581,28 +609,14 @@ func (t *TranspositionTable) Probe(key uint64, minDepth int) (Move, int, uint8, 
 	return Move(move), int(score), flag, int(depth), true, int(depth) >= minDepth
 }
 
+// Save stores a search result into memory.
+// We use always replace, so we can get relevant entries
+// Its simple but can overwrite good entries with trash ones
 func (t *TranspositionTable) Save(key uint64, mv Move, score int, depth int, flag uint8) {
 	depth = min(depth, 63)
 	idx := int(key & t.mask)
-	old := t.entries[idx]
 	newPacked := packEntry(uint32(mv), int16(score), uint8(t.gen), uint8(depth), flag)
-	if uint8(old.packed>>8) != uint8(t.gen) {
-		t.entries[idx] = ttEntry{key: key, packed: newPacked}
-		return
-	}
-
-	if old.key == key {
-		oldDepth := uint8((old.packed >> 2) & 0x3F)
-		oldFlag := uint8(old.packed & 0x3)
-		if depth > int(oldDepth) || (depth == int(oldDepth) && flag == ttFlagExact && oldFlag != ttFlagExact) {
-			t.entries[idx] = ttEntry{key: key, packed: newPacked}
-		}
-	} else {
-		oldDepth := uint8((old.packed >> 2) & 0x3F)
-		if depth >= int(oldDepth) {
-			t.entries[idx] = ttEntry{key: key, packed: newPacked}
-		}
-	}
+	t.entries[idx] = ttEntry{key: key, packed: newPacked}
 }
 
 func init() {
@@ -1745,12 +1759,17 @@ func updateHistory(side, from, to, bonus int) {
 }
 
 func (p *Position) evalPawns() (mg, eg int) {
+	// Explained this during initTT, same logic here
 	idx := p.pawnHash & (pawnTableSize - 1)
 	entry := &pawnTable[idx]
+
+	// Check if we have evaluated this same pawn struct before
 	if entry.key == p.pawnHash {
+		// We have evaluated this before, return cached score
 		return entry.mgScore, entry.egScore
 	}
 
+	// We dont have it, recalculate
 	mg, eg = 0, 0
 	whitePawns := p.pieces[White][Pawn]
 	blackPawns := p.pieces[Black][Pawn]
@@ -1820,6 +1839,10 @@ func (p *Position) evalPawns() (mg, eg int) {
 		}
 	}
 
+	// Save the newly calculated scores into the pawn hash table.
+	// This uses always replace like tt
+	// because its simple, reliable mostly
+	// And these dont change that often usually
 	entry.key = p.pawnHash
 	entry.mgScore = mg
 	entry.egScore = eg
@@ -2415,6 +2438,8 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 				} else {
 					scoreFromTT += ply
 				}
+				// Can use this regardless of depth
+				usable = true
 			}
 
 			if usable {
@@ -2941,7 +2966,7 @@ func parseSetOption(parts []string) (name, value string) {
 func uciLoop() {
 	pos := NewPosition()
 	scanner := bufio.NewScanner(os.Stdin)
-	fmt.Fprintln(os.Stderr, "# Soomi V1.2.0 ready. Type 'help' for available commands.")
+	fmt.Fprintln(os.Stderr, "# Soomi V1.2.0B ready. Type 'help' for available commands.")
 
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -2953,7 +2978,7 @@ func uciLoop() {
 
 		switch cmd {
 		case "uci":
-			fmt.Println("id name Soomi V1.2.0")
+			fmt.Println("id name Soomi V1.2.0B")
 			fmt.Println("id author Otto Laukkanen")
 			fmt.Println("option name Hash type spin default 256 min 1 max 4096")
 			fmt.Println("uciok")
@@ -3231,7 +3256,7 @@ func uciLoop() {
 }
 
 func printHelp() {
-	fmt.Println(`# Soomi V1.2.0 - Available Commands:
+	fmt.Println(`# Soomi V1.2.0B - Available Commands:
 
 UCI Protocol Commands:
   uci                              - Initialize UCI mode
@@ -3276,10 +3301,10 @@ Example Usage:
 }
 
 func main() {
-	fmt.Fprintln(os.Stderr, "Soomi V1.2.0 - UCI Chess Engine")
+	fmt.Fprintln(os.Stderr, "Soomi V1.2.0B - UCI Chess Engine")
 	fmt.Fprintln(os.Stderr, "Type 'help' for available commands or 'uci' to enter UCI mode")
 	uciLoop()
 }
 
 // To make an executable
-// set GOAMD64=v3 && go build -trimpath -ldflags "-s -w" -gcflags "all=-B" -o Soomi-V1.2.0.exe soomi.go
+// set GOAMD64=v3 && go build -trimpath -ldflags "-s -w" -gcflags "all=-B" -o Soomi-V1.2.0B.exe soomi.go
