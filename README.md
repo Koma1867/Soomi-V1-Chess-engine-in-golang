@@ -18,7 +18,7 @@
 - Principal Variation Search (PVS)
 - Iterative Deepening with Aspiration Windows
 - Transposition Table
-- Check and singular extensions
+- Check extensions
 - Quiescence Search with Delta Pruning
 - Static Exchange Evaluation (SEE)
 - Pruning techniques including Late Move Reductions (LMR), Null Move Pruning (NMP), Reverse Futility Pruning (RFP) and Mate Distance Pruning
