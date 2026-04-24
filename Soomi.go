@@ -2598,9 +2598,7 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 					updateHistory(p.side, quietsTried[i].from(), quietsTried[i].to(), -bonus)
 				}
 				// Countermove
-				if ply > 0 {
-					countermoves[p.side][prevMove.from()][prevMove.to()] = m
-				}
+				countermoves[p.side][prevMove.from()][prevMove.to()] = m
 			}
 
 			// Store in transposition table
@@ -3011,6 +3009,7 @@ func uciLoop() {
 			if cur := currentTC.Swap(nil); cur != nil {
 				cur.Stop()
 			}
+			searchWG.Wait()
 			tt.Clear()
 			clearHeuristics()
 			pos.setStartPos()
@@ -3019,6 +3018,7 @@ func uciLoop() {
 			if cur := currentTC.Swap(nil); cur != nil {
 				cur.Stop()
 			}
+			searchWG.Wait()
 			if len(parts) < 2 {
 				fmt.Println("# Error: position requires arguments")
 				continue
