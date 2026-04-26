@@ -2537,6 +2537,9 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 			continue
 		}
 		legalMoves++
+		if ply == 0 && depth > 4 {
+			fmt.Printf("info depth %d currmove %v currmovenumber %d\n", depth, m, legalMoves)
+		}
 		isQuiet := !m.isCapture() && !m.isPromo()
 		if isQuiet {
 			quietsTried[quietCount] = m
@@ -2833,7 +2836,7 @@ func (tc *TimeControl) shouldContinue(lastIter time.Duration) bool {
 		return false
 	}
 
-	if tc.infinite || tc.depth > 0 || lastIter <= 0 {
+	if tc.infinite || tc.depth > 0 || tc.movetime > 0 || lastIter <= 0 {
 		return true
 	}
 
@@ -3281,6 +3284,7 @@ Additional Commands:
   eval                             - Show static evaluation
   perft <depth>                    - Run perft test
   divide <depth>                   - Run divide test
+  audit                            - Audit state handling
   help                             - Show this help message
 
 Example Usage:
