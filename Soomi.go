@@ -62,6 +62,7 @@ const (
 	scoreCaptureBase                   = 800000
 	scoreKiller1                       = 750000
 	scoreKiller2                       = 740000
+	scoreCountermove                   = 200000
 	minTimeMs            int64         = 5
 	perMoveCapDiv        int64         = 3
 	nextIterMult                       = 2
@@ -2215,7 +2216,7 @@ func (p *Position) orderMoves(moves []Move, bestMove Move, killer1, killer2 Move
 				score = history[us][from][to]
 				if prevMove != 0 && m == countermoves[us][prevMove.from()][prevMove.to()] {
 					// Countermove bonus
-					score += 20000
+					score += scoreCountermove
 				}
 				// PST bonus for moves without history
 				score += pst[us][pt][to] - pst[us][pt][from]
@@ -2995,13 +2996,10 @@ func uciLoop() {
 					fmt.Printf("info string invalid hash value: %s\n", value)
 					continue
 				}
-				if cur := currentTC.Load(); cur != nil {
+				if cur := currentTC.Swap(nil); cur != nil {
 					cur.Stop()
-					if currentTC.Load() != nil {
-						fmt.Printf("info string Hash unchanged (search running)\n")
-						continue
-					}
 				}
+				searchWG.Wait()
 				InitTT(sizeMB)
 				fmt.Printf("info string Hash set to %d MB\n", sizeMB)
 			} else {
