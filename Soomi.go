@@ -2566,6 +2566,9 @@ func (p *Position) negamax(depth, alpha, beta, ply int, pv *[]Move, tc *TimeCont
 				if !pvNode {
 					red++
 				}
+				if history[p.side^1][m.from()][m.to()] < 0 {
+					red++
+				}
 				eff = max(1, childDepth-red)
 			}
 			if canReduce {
